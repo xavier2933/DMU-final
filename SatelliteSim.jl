@@ -67,67 +67,7 @@ module SatelliteSim
             
                 return SparseCat([Tuple(new_s)], transition_probs)
             end,            
-            # transition = function(s, a)
-            #     new_s = collect(s)
-            #     prob = 1.0
-            #     transition_probs = Float64[]  # To store probabilities
-                
-            #     for idx in SAT_IDS
-            #         if new_s[idx] > 0
-            #             act = a[idx]
-            #             if act == :left && idx > 1
-            #                 new_s[idx] -= 1
-            #                 new_s[idx - 1] += 1
-            #                 push!(transition_probs, 0.8)
-            #             elseif act == :right && idx < 10
-            #                 new_s[idx] -= 1
-            #                 new_s[idx + 1] += 1
-            #                 push!(transition_probs, 0.8)
-            #             elseif act == :ground
-            #                 new_s[idx] -= 1
-            #                 new_s[GROUND_ID] += 1
-            #                 push!(transition_probs, 0.2)
-            #             elseif act == :none
-            #                 push!(transition_probs, 1.0)  # No change in state, probability = 1
-            #             end
-            #         end
-            #     end
-                
-            #     # Normalize the probabilities so that they sum to 1
-            #     total_prob = sum(transition_probs)
-            #     transition_probs .= transition_probs ./ total_prob
-                
-            #     return SparseCat([Tuple(new_s)], transition_probs)
-            # end,
             
-            # transition = function(s, a)
-            #     new_s = collect(s)
-            #     prob = 1.0
-            
-            #     for idx in SAT_IDS
-            #         if new_s[idx] > 0
-            #             act = a[idx]
-            #             if act == :left && idx > 1
-            #                 new_s[idx] -= 1
-            #                 new_s[idx - 1] += 1
-            #                 prob = 0.8
-            #             elseif act == :right && idx < 10
-            #                 new_s[idx] -= 1
-            #                 new_s[idx + 1] += 1
-            #                 prob = 0.8
-            #             elseif act == :ground
-            #                 new_s[idx] -= 1
-            #                 new_s[GROUND_ID] += 1
-            #                 prob = 0.2
-            #             elseif act == :none
-            #                 prob = 1.0
-            #             end
-            #         end
-            #     end
-            
-            #     return SparseCat([Tuple(new_s)], [prob])
-            # end,
-    
             # Observation is just the state for now
             observation = (s, a, sp) -> sp,
             obstype = NTuple{11, Int},
