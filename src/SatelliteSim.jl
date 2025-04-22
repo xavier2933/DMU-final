@@ -18,7 +18,7 @@ module SatelliteSim
         states = [Tuple(s) for s in product(fill(0:total_info, 11)...) if sum(s) == total_info]
 
         # Define the initial state: all information is in the first satellite
-        initialstate = Deterministic(Tuple([total_info; zeros(Int, 10)]))
+        @show initialstate = Deterministic(Tuple([total_info; zeros(Int, 10)]))
     
         satellite_network = QuickPOMDP(
 
@@ -90,10 +90,17 @@ module SatelliteSim
     
 
     function run_policy(pomdp)
-        solver = ValueIterationSolver()
+        @show solver = ValueIterationSolver()
+        println("mdp?")
         mdp = UnderlyingMDP(pomdp)  # Convert the POMDP into an MDP for planning
+        num_states = length(states(mdp))
+        num_actions = length(actions(mdp))
+        println("MDP Dimensions:")
+        println("  Number of states: ", num_states)
+        println("  Number of actions: ", num_actions)
+        println("solving")
         policy = solve(solver, mdp)
-    
+        
         s = rand(initialstate(pomdp))  # Draw initial state from distribution
         println("Initial state: ", s)
     
