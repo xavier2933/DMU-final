@@ -7,19 +7,26 @@ module SatelliteSim
     using Distributions: Categorical, pdf, rand
     export create_simulation, run_policy
 
-    const SAT_IDS = 1:10
-    const GROUND_ID = 11
-
-    function create_simulation()
-        # Amount of information in the satellite_network
-        total_info = 1 # NOTE: I tried more info it never terminated
-
-        # Define the full state space: all combinations of 0:total_info over 11 positions
-        states = [Tuple(s) for s in product(fill(0:total_info, 11)...) if sum(s) == total_info]
-
-        # Define the initial state: all information is in the first satellite
-        @show initialstate = Deterministic(Tuple([total_info; zeros(Int, 10)]))
     
+    function create_simulation( ; 
+                                num_satellites::Int,
+                                num_ground_stations::Int,
+                                initial_information_vector::Tuple
+                            )
+
+        @assert length(initial_information_vector) == (num_satellites + num_ground_stations) "Length of initial_information_vector must match num_satellites + num_ground_stations"
+
+        SAT_IDS = 1:num_satellites
+        GROUND_ID = num_satellites + 1
+
+        total_info = sum(initial_information_vector)
+
+        # Define the full state space: all combinations of info across satellites and ground stations summing to total_info
+        states = [Tuple(s) for s in product(fill(0:total_info, num_satellites + num_ground_stations)...) if sum(s) == total_info]
+
+        # Define initial state
+        initialstate = Deterministic(initial_information_vector)
+
         satellite_network = QuickPOMDP(
 
             # States are all combinations of 0:total_info over 11 positions
