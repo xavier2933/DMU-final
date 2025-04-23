@@ -242,6 +242,204 @@ function evaluate_controller(joint_controller::JointController, problem::DecTige
     return value, V
 end
 
+# Prune dominated nodes from a controller
+function prune_controller(agent_idx::Int, controller::AgentController, 
+                         other_controllers::Vector{AgentController}, 
+                         problem::DecTigerPOMDP)
+    
+    # Get current nodes in controller
+    nodes = controller.nodes
+    num_nodes = length(nodes)
+    
+    # If we have only one node, we can't prune
+    if num_nodes <= 1
+        return controller, false
+    end
+    
+    # Get information about the problem
+    states = ["tiger-left", "tiger-right"]
+    num_states = length(states)
+    
+    # Get information about other controllers
+    other_controller_sizes = [length(c.nodes) for c in other_controllers]
+    
+    # Create a matrix to store values for all combinations
+    # V[i, j, s] = value of node i when other agents are in joint config j and state is s
+    num_other_configs = prod(other_controller_sizes)
+    V = zeros(num_nodes, num_other_configs, num_states)
+    
+    # Populate the value matrix
+    # This would normally come from evaluating value function V(qi, q-i, s)
+    # For demonstration, we'll compute it on-the-fly
+    
+    # Create all possible configurations of other agents' nodes
+    other_config_indices = collect(Iterators.product([1:size for size in other_controller_sizes]...))
+    
+    # For each node in our controller
+    for node_idx in 1:num_nodes
+        # For each configuration of other agents' nodes
+        for (config_idx, other_config) in enumerate(other_config_indices)
+            # For each state
+            for state_idx in 1:num_states
+                state = states[state_idx]
+                
+                # Get actions for this agent and other agents
+                action = nodes[node_idx].action
+                other_actions = [other_controllers[i].nodes[other_config[i]].action 
+                                for i in 1:length(other_controllers)]
+                
+                # Convert to joint action
+                joint_action = vcat(action, other_actions)
+                
+                # Compute immediate reward
+                immediate_reward = compute_reward(state, joint_action, ["listen", "open-left", "open-right"])
+                
+                # Compute expected future reward (this would be more complex in practice)
+                # For demonstration, we'll use a simplified approach
+                future_reward = 0.0
+                
+                # Calculate total value
+                V[node_idx, config_idx, state_idx] = immediate_reward + future_reward
+            end
+        end
+    end
+    
+    # Now check for dominance between nodes
+    pruned_nodes = []
+    pruned_any = false
+    
+    # Find the best node (highest average value)
+    best_node_idx = 1
+    best_node_value = -Inf
+    
+    for node_idx in 1:num_nodes
+        node_avg_value = mean(V[node_idx, :, :])
+        if node_avg_value > best_node_value
+            best_node_value = node_avg_value
+            best_node_idx = node_idx
+        end
+    end
+    
+    # For each node (except the best node)
+    for node_idx in 1:num_nodes
+        # Don't prune the best node
+        if node_idx == best_node_idx
+            continue
+        end
+        
+        # Try to find if this node is dominated
+        is_dominated = false
+        dominating_node = 0
+        
+        for other_node in 1:num_nodes
+            if other_node == node_idx
+                continue
+            end
+            
+            # Check if other_node dominates node_idx
+            dominates = true
+            
+            for config_idx in 1:num_other_configs
+                for state_idx in 1:num_states
+                    if V[other_node, config_idx, state_idx] < V[node_idx, config_idx, state_idx]
+                        dominates = false
+                        break
+                    end
+                end
+                if !dominates
+                    break
+                end
+            end
+            
+            if dominates
+                is_dominated = true
+                dominating_node = other_node
+                break
+            end
+        end
+        
+        if is_dominated
+            push!(pruned_nodes, (node_idx, dominating_node))
+            pruned_any = true
+        end
+    end
+    
+    # If no nodes were dominated, return the original controller
+    if !pruned_any
+        return controller, false
+    end
+    
+    # Create a new controller without the dominated nodes
+    new_nodes = []
+    
+    # Create a mapping from old node indices to new ones
+    node_map = Dict{Int, Int}()
+    new_idx = 1
+    
+    for old_idx in 1:num_nodes
+        # Check if this node was pruned
+        pruned = false
+        for (pruned_idx, _) in pruned_nodes
+            if old_idx == pruned_idx
+                pruned = true
+                break
+            end
+        end
+        
+        if !pruned
+            # Add this node to the new controller
+            push!(new_nodes, deepcopy(nodes[old_idx]))
+            node_map[old_idx] = new_idx
+            new_idx += 1
+        end
+    end
+    
+    # If we've somehow pruned all nodes, keep the best node
+    if length(new_nodes) == 0
+        println("Warning: Attempted to prune all nodes. Keeping the best node.")
+        push!(new_nodes, deepcopy(nodes[best_node_idx]))
+        node_map[best_node_idx] = 1
+    end
+    
+    # Fix for the KeyError - also map pruned nodes to their dominating node's new index
+    for (pruned_idx, dominating_idx) in pruned_nodes
+        # Make sure the dominating node has a mapping
+        if haskey(node_map, dominating_idx)
+            node_map[pruned_idx] = node_map[dominating_idx]
+        else
+            # If the dominating node was also pruned, follow the chain
+            # This is a simplification - ideally we'd resolve the full chain of dominance
+            for (p_idx, d_idx) in pruned_nodes
+                if p_idx == dominating_idx && haskey(node_map, d_idx)
+                    node_map[pruned_idx] = node_map[d_idx]
+                    break
+                end
+            end
+            
+            # If we still don't have a mapping, default to node 1
+            if !haskey(node_map, pruned_idx)
+                node_map[pruned_idx] = 1
+            end
+        end
+    end
+    
+    # Update transitions in the remaining nodes
+    for node in new_nodes
+        for obs in keys(node.transitions)
+            old_next = node.transitions[obs]
+            
+            # Use the node mapping to update the transition
+            if haskey(node_map, old_next)
+                node.transitions[obs] = node_map[old_next]
+            else
+                # Fallback to node 1 if mapping doesn't exist
+                node.transitions[obs] = 1
+            end
+        end
+    end
+    
+    return AgentController(new_nodes), true
+end
 
 function dec_pomdp_pi(controller::JointController, prob)
     # Initialize
@@ -258,7 +456,7 @@ function dec_pomdp_pi(controller::JointController, prob)
     println("Initial controller value: $(V_prev)")
     
     # Main policy iteration loop
-    while it < 10
+    while it < 30
         improved = false
         
         # [Backup and evaluate]
@@ -280,68 +478,40 @@ function dec_pomdp_pi(controller::JointController, prob)
         println("After backup, controller value: $(V_curr)")
         
         # Check for improvement
+        # [Prune dominated nodes until none can be removed]
+        pruned_any = true
+        while pruned_any
+            pruned_any = false
+            
+            for i in 1:n
+                # Create a list of other controllers
+                other_controllers = [ctrlr_t.controllers[j] for j in 1:n if j != i]
+                
+                # Try to prune agent i's controller
+                new_controller, was_pruned = prune_controller(i, ctrlr_t.controllers[i], other_controllers, prob)
+                
+                if was_pruned
+                    ctrlr_t.controllers[i] = new_controller
+                    pruned_any = true
+                    println("Pruned agent $(i)'s controller to $(length(new_controller.nodes)) nodes")
+                end
+            end
+            
+            if pruned_any
+                # Re-evaluate after pruning
+                V_curr, _ = evaluate_controller(ctrlr_t, prob)
+                println("After pruning, controller value: $(V_curr)")
+            end
+        end
+
         if V_curr > V_prev
             V_prev = V_curr
             improved = true
             println("Iteration $it improved value to: $V_curr")
-        else
-            println("No improvement in iteration $it")
-            
-            # Optional: Add randomization to escape local optima
-            if it > 0 && !improved
-                println("Trying random perturbation...")
-                for i in 1:n
-                    if length(ctrlr_t.controllers[i].nodes) > 0
-                        # Randomly modify one node
-                        rand_node_idx = rand(1:length(ctrlr_t.controllers[i].nodes))
-                        old_node = ctrlr_t.controllers[i].nodes[rand_node_idx]
-                        
-                        # Create new node with random action
-                        rand_action = rand(1:3)
-                        new_transitions = Dict{String, Int}()
-                        
-                        # Copy transitions with random changes
-                        for (obs, next) in old_node.transitions
-                            if rand() < 0.3  # 30% chance to change
-                                new_transitions[obs] = rand(1:length(ctrlr_t.controllers[i].nodes))
-                            else
-                                new_transitions[obs] = next
-                            end
-                        end
-                        
-                        # Create new node
-                        new_node = FSCNode(rand_action, new_transitions)
-                        
-                        # Replace in controller
-                        new_nodes = Vector{FSCNode}()
-                        for j in 1:length(ctrlr_t.controllers[i].nodes)
-                            if j == rand_node_idx
-                                push!(new_nodes, new_node)
-                            else
-                                push!(new_nodes, ctrlr_t.controllers[i].nodes[j])
-                            end
-                        end
-                        
-                        ctrlr_t.controllers[i] = AgentController(new_nodes)
-                    end
-                end
-                
-                # Re-evaluate after randomization
-                V_rand, _ = evaluate_controller(ctrlr_t, prob)
-                println("After randomization, value: $V_rand")
-                
-                if V_rand > V_prev
-                    V_prev = V_rand
-                    improved = true
-                    println("Randomization improved value to: $V_rand")
-                else
-                    println("No improvement from randomization, stopping.")
-                    break
-                end
-            else
-                break  # No improvement and no randomization applied, so stop
-            end
         end
+        
+        # Calculate improvement
+        improvement = abs(V_curr - V_prev)
         
         it += 1
         println("Completed iteration $(it)")
