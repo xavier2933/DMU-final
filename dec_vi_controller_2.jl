@@ -18,29 +18,47 @@ struct JointController
 end
 
 
-function create_initial_controller(problem::DecTigerPOMDP)
-    # Create a simple initial controller for each agent
-    controllers = []
+function create_heuristic_controller(prob::DecTigerPOMDP)
+    agent_controllers = Vector{AgentController}()
     
-    # Get actions and observations from your problem
-    agent_actions = ["listen", "open-left", "open-right"]
-    agent_observations = ["hear-left", "hear-right"]
-    
-    # We need two controllers (one for each agent)
     for i in 1:2
-        # Create a single node that always listens (the safest initial action)
-        # Using index 1 for "listen" based on your action ordering
-        node = FSCNode(1, Dict{String, Int}())
+        # Create a controller based on a sensible strategy for Dec-Tiger
         
-        # For each observation, transition back to this node
-        for obs in agent_observations
-            node.transitions[obs] = 1
-        end
+        # Node 1: Listen
+        node1 = FSCNode(
+            1,  # Listen action
+            Dict("hear-left" => 2, "hear-right" => 3)  # Transition based on observation
+        )
         
-        push!(controllers, AgentController([node]))
+        # Node 2: Listen again to confirm (heard tiger on left)
+        node2 = FSCNode(
+            1,  # Listen action
+            Dict("hear-left" => 4, "hear-right" => 1)  # Confirm or go back to listening
+        )
+        
+        # Node 3: Listen again to confirm (heard tiger on right)
+        node3 = FSCNode(
+            1,  # Listen action
+            Dict("hear-left" => 1, "hear-right" => 5)  # Confirm or go back to listening
+        )
+        
+        # Node 4: Open right door (confident tiger is on left)
+        node4 = FSCNode(
+            3,  # Open right
+            Dict("hear-left" => 1, "hear-right" => 1)  # Go back to listening
+        )
+        
+        # Node 5: Open left door (confident tiger is on right)
+        node5 = FSCNode(
+            2,  # Open left
+            Dict("hear-left" => 1, "hear-right" => 1)  # Go back to listening
+        )
+        
+        ctrl = AgentController([node1, node2, node3, node4, node5])
+        push!(agent_controllers, ctrl)
     end
     
-    return JointController(controllers)
+    return JointController(agent_controllers)
 end
 
 function compute_reward(state, joint_action, actions)
@@ -203,7 +221,7 @@ function evaluate_controller(joint_controller::JointController, problem::DecTige
         
         # Check convergence
         if maximum(abs.(V_new - V)) < epsilon
-            println("Value iteration converged after $(iter) iterations")
+            # println("Value iteration converged after $(iter) iterations")
             break
         end
         
@@ -608,8 +626,10 @@ end
 # @show dec_tiger = DecTigerPOMDP()
 # @show states(dec_tiger)
 
-# ctrl = create_initial_controller(dec_tiger)
-# dec_pomdp_pi(ctrl, dec_tiger)
+println("running")
+
+ctrl = create_heuristic_controller(dec_tiger)
+dec_pomdp_pi(ctrl, dec_tiger)
 
 function test_backup()
     # Create a simple Dec-Tiger POMDP
@@ -873,6 +893,6 @@ function create_coordinated_controller()
     return JointController([agent1_ctrl, agent2_ctrl])
 end
 
-prob = DecTigerPOMDP()
-best_controller, best_value = test_multiple_controllers(prob)
-println("Best controller found with value: $best_value")
+# prob = DecTigerPOMDP()
+# best_controller, best_value = test_multiple_controllers(prob)
+# println("Best controller found with value: $best_value")
