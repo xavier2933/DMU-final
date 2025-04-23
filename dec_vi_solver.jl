@@ -1,419 +1,391 @@
+# dec-tiger-policy-iteration.jl
+using Pkg
+Pkg.activate("dec_pomdp_env")  # Create a new environment
+include("dec_tiger.jl")  # Your Dec-Tiger implementation file
+
 using POMDPs
 using POMDPTools
 using LinearAlgebra
-using Random
+using JuMP
+using GLPK
 
-"""
-    NodeController
-
-Represents a single node in a finite state controller for an agent.
-"""
-struct NodeController
-    id::Int                   # Unique identifier for the node
-    action::String            # Action to take at this node
-    transitions::Dict{String, Vector{Tuple{Float64, Int}}}  # Maps observation to (probability, next_node) tuples
-end
-
-"""
-    FiniteStateController
-
-A finite state controller for a single agent in a Dec-POMDP.
-"""
+# First, let's define the controller structure
 struct FiniteStateController
-    nodes::Vector{NodeController}  # The nodes in the controller
-    initial_node::Int             # The starting node
+    # Number of nodes in the controller
+    num_nodes::Int
+    
+    # Action for each node
+    action_map::Dict{Int, String}
+    
+    # Next node for each (current_node, observation) pair
+    # transition_map[current_node][observation] = next_node
+    transition_map::Dict{Int, Dict{String, Int}}
 end
 
-"""
-    ExhaustiveBackup
-
-Performs an exhaustive backup of a finite state controller to improve its value.
-"""
-function ExhaustiveBackup(fsc::FiniteStateController, dec_pomdp::DecTigerPOMDP, agent_idx::Int, other_agent_fsc::FiniteStateController)
-    # Get problem components
-    S = states(dec_pomdp)
-    A_i = ["listen", "open-left", "open-right"]  # Actions for this agent
-    O_i = ["hear-left", "hear-right"]            # Observations for this agent
+# Initialize a simple controller with one node for each action
+function create_initial_controller(actions::Vector{String}, observations::Vector{String})
+    num_nodes = length(actions)
+    action_map = Dict{Int, String}()
+    transition_map = Dict{Int, Dict{String, Int}}()
     
-    new_nodes = Vector{NodeController}()
-    
-    # For each possible action for this agent
-    for a_i in A_i
-        # For each possible next node mapping for each observation
-        observation_mappings = Dict{String, Vector{Tuple{Float64, Int}}}()
+    # Create a simple controller where each node executes a different action
+    # and transitions back to itself regardless of the observation
+    for (i, action) in enumerate(actions)
+        action_map[i] = action
+        transition_map[i] = Dict{String, Int}()
         
-        for o_i in O_i
-            # For simple deterministic controllers, just map to a node with probability 1
-            # In more complex implementations, we would consider all possible distributions
-            observation_mappings[o_i] = [(1.0, rand(1:length(fsc.nodes)))]
+        for obs in observations
+            transition_map[i][obs] = i  # Stay in the same node
         end
-        
-        # Create a new node and add it to the controller
-        new_node = NodeController(length(new_nodes) + 1, a_i, observation_mappings)
-        push!(new_nodes, new_node)
     end
     
-    # Create a new controller with the new nodes
-    # For simplicity, we maintain the same initial node or set to 1 if it's out of bounds
-    initial_node = (fsc.initial_node <= length(new_nodes)) ? fsc.initial_node : 1
-    return FiniteStateController(new_nodes, initial_node)
+    return FiniteStateController(num_nodes, action_map, transition_map)
 end
 
-"""
-    ComputeControllerValue
-
-Computes the value function for a joint controller.
-"""
-function ComputeControllerValue(dec_pomdp::DecTigerPOMDP, 
-                               controllers::Vector{FiniteStateController})
-    # Get problem components
-    S = states(dec_pomdp)
-    discount_factor = discount(dec_pomdp)
+# Function to perform an exhaustive backup for a single agent's controller
+function exhaustive_backup(controller::FiniteStateController, actions::Vector{String}, observations::Vector{String})
+    old_num_nodes = controller.num_nodes
+    new_action_map = copy(controller.action_map)
+    new_transition_map = deepcopy(controller.transition_map)
     
-    # Create value function matrix
-    # Dimensions: |S| x |Q_1| x |Q_2| (for 2 agents)
-    # For simplicity, let's use a Dict for sparse representation
-    V = Dict{Tuple{String, Int, Int}, Float64}()
+    # For each possible action
+    node_counter = old_num_nodes + 1
     
-    # Initialize with zeros
-    for s in S
-        for q1 in 1:length(controllers[1].nodes)
-            for q2 in 1:length(controllers[2].nodes)
-                V[(s, q1, q2)] = 0.0
+    for action in actions
+        # For each possible combination of (observation, next_node)
+        for obs in observations
+            for next_node in 1:old_num_nodes
+                # Add a new node to the controller with this action and transition
+                new_action_map[node_counter] = action
+                new_transition_map[node_counter] = Dict{String, Int}()
+                
+                # Set transitions for all observations
+                for o in observations
+                    if o == obs
+                        new_transition_map[node_counter][o] = next_node
+                    else
+                        # Default transition for other observations (can be improved)
+                        new_transition_map[node_counter][o] = 1  # Default to first node
+                    end
+                end
+                
+                node_counter += 1
             end
         end
     end
     
-    # Value iteration to compute controller value
-    max_iterations = 100
-    epsilon = 1e-6
+    return FiniteStateController(node_counter - 1, new_action_map, new_transition_map)
+end
+
+# Function to evaluate a joint controller for a Dec-POMDP
+function evaluate_joint_controller(pomdp::DecTigerPOMDP, 
+                                  controllers::Vector{FiniteStateController})
+    # Get all states
+    S = states(pomdp)
     
-    for iter in 1:max_iterations
+    # Number of nodes in each controller
+    num_nodes = [c.num_nodes for c in controllers]
+    
+    # Create a value table: V[s, n1, n2] = value of being in state s with agents in nodes n1, n2
+    V = Dict{Tuple{String, Int, Int}, Float64}()
+    
+    # Initialize values to 0
+    for s in S
+        for n1 in 1:num_nodes[1]
+            for n2 in 1:num_nodes[2]
+                V[(s, n1, n2)] = 0.0
+            end
+        end
+    end
+    
+    # Iterate until convergence
+    gamma = discount(pomdp)
+    epsilon = 1e-6
+    max_iter = 1000
+    
+    for iter in 1:max_iter
         delta = 0.0
         
-        # Update value for each state-controller node combination
         for s in S
-            for q1 in 1:length(controllers[1].nodes)
-                for q2 in 1:length(controllers[2].nodes)
-                    # Get actions from current controller nodes
-                    a1 = controllers[1].nodes[q1].action
-                    a2 = controllers[2].nodes[q2].action
+            for n1 in 1:num_nodes[1]
+                for n2 in 1:num_nodes[2]
+                    old_value = V[(s, n1, n2)]
+                    
+                    # Get actions from controller nodes
+                    a1 = controllers[1].action_map[n1]
+                    a2 = controllers[2].action_map[n2]
                     joint_action = (a1, a2)
                     
                     # Get immediate reward
-                    r = reward(dec_pomdp, s, joint_action)
+                    r = reward(pomdp, s, joint_action)
                     
-                    # Compute expected future reward
+                    # Calculate expected future value
                     future_value = 0.0
                     
                     # For each possible next state
                     for sp in S
                         # Get transition probability
-                        trans_dist = transition(dec_pomdp, s, joint_action)
-                        trans_prob = pdf(trans_dist, sp)
+                        trans_prob = pdf(transition(pomdp, s, joint_action), sp)
                         
-                        if trans_prob > 0
-                            # For each possible observation combination
-                            obs_dist = observation(dec_pomdp, joint_action, sp)
+                        # For each possible joint observation
+                        obs_dist = observation(pomdp, joint_action, sp)
+                        for joint_obs in support(obs_dist)
+                            o1, o2 = joint_obs
+                            obs_prob = pdf(obs_dist, joint_obs)
                             
-                            for o1 in ["hear-left", "hear-right"]
-                                for o2 in ["hear-left", "hear-right"]
-                                    joint_obs = (o1, o2)
-                                    
-                                    # Probability of this observation
-                                    obs_prob = pdf(obs_dist, joint_obs)
-                                    
-                                    if obs_prob > 0
-                                        # Get next controller nodes
-                                        next_q1_dist = controllers[1].nodes[q1].transitions[o1]
-                                        next_q2_dist = controllers[2].nodes[q2].transitions[o2]
-                                        
-                                        # For each possible next controller node combination
-                                        for (p1, next_q1) in next_q1_dist
-                                            for (p2, next_q2) in next_q2_dist
-                                                future_value += trans_prob * obs_prob * p1 * p2 * 
-                                                               V[(sp, next_q1, next_q2)]
-                                            end
-                                        end
-                                    end
-                                end
-                            end
+                            # Get next nodes according to controllers
+                            next_n1 = controllers[1].transition_map[n1][o1]
+                            next_n2 = controllers[2].transition_map[n2][o2]
+                            
+                            # Add to future value
+                            future_value += trans_prob * obs_prob * V[(sp, next_n1, next_n2)]
                         end
                     end
                     
-                    # New value is immediate reward plus discounted future reward
-                    new_value = r + discount_factor * future_value
+                    # Update value
+                    V[(s, n1, n2)] = r + gamma * future_value
                     
-                    # Update max delta
-                    delta = max(delta, abs(new_value - V[(s, q1, q2)]))
-                    
-                    # Update value function
-                    V[(s, q1, q2)] = new_value
+                    # Track maximum change
+                    delta = max(delta, abs(V[(s, n1, n2)] - old_value))
                 end
             end
         end
         
         # Check for convergence
         if delta < epsilon
+            println("Value iteration converged after $iter iterations")
             break
+        end
+        
+        if iter == max_iter
+            println("Warning: Value iteration reached maximum iterations without converging")
         end
     end
     
     return V
 end
 
-"""
-    PruneNode
-
-Prunes dominated nodes from a controller.
-"""
-function PruneNode(agent_idx::Int, other_agent_fscs::Vector{FiniteStateController}, 
-                  fsc::FiniteStateController, dec_pomdp::DecTigerPOMDP)
-    # Get problem components
-    S = states(dec_pomdp)
+# Function to prune dominated nodes from a controller
+function prune_controller(pomdp::DecTigerPOMDP, 
+                         agent_idx::Int, 
+                         controllers::Vector{FiniteStateController}, 
+                         V::Dict{Tuple{String, Int, Int}, Float64})
+    controller = controllers[agent_idx]
+    S = states(pomdp)
     
-    # For simplicity, we'll just remove a random node if there are more than 1
-    # In a real implementation, we would use linear programming to find dominated nodes
-    if length(fsc.nodes) <= 1
-        return fsc, false  # Nothing pruned
+    # No need to prune if there's only one node
+    if controller.num_nodes <= 1
+        return controller, false
     end
     
-    # Remove a random node that is not the initial node
-    prunable_nodes = filter(i -> i != fsc.initial_node, 1:length(fsc.nodes))
-    
-    if isempty(prunable_nodes)
-        return fsc, false  # Nothing pruned
-    end
-    
-    node_to_remove = rand(prunable_nodes)
-    
-    # Create new set of nodes without the pruned node
-    new_nodes = [n for n in fsc.nodes if n.id != node_to_remove]
-    
-    # Update node IDs to be sequential
-    for (i, node) in enumerate(new_nodes)
-        # Create a new node with updated ID
-        new_transitions = Dict{String, Vector{Tuple{Float64, Int}}}()
-        for (obs, trans) in node.transitions
-            # Update transitions to handle removed node
-            new_trans = [(p, q > node_to_remove ? q-1 : q) for (p, q) in trans if q != node_to_remove]
-            
-            # If all transitions were to the removed node, redirect to a random remaining node
-            if isempty(new_trans)
-                new_trans = [(1.0, rand(1:length(new_nodes)))]
-            end
-            
-            new_transitions[obs] = new_trans
-        end
+    # For each node, check if it's dominated by a convex combination of other nodes
+    for node_to_check in 1:controller.num_nodes
+        # Create a linear program to check if node is dominated
+        model = Model(GLPK.Optimizer)
+        set_silent(model)
         
-        # Replace the node
-        new_nodes[i] = NodeController(i, node.action, new_transitions)
-    end
-    
-    # Update initial node if needed
-    new_initial = fsc.initial_node > node_to_remove ? fsc.initial_node - 1 : fsc.initial_node
-    
-    return FiniteStateController(new_nodes, new_initial), true  # Node was pruned
-end
-
-"""
-    UpdateController
-
-Updates the controller after pruning to maintain a consistent structure.
-"""
-function UpdateController(fsc::FiniteStateController)
-    # For our simple implementation, no further update is needed
-    # In more complex implementations, this might involve recomputing node values
-    return fsc
-end
-
-"""
-    PolicyIteration
-
-Implements the policy iteration algorithm for Dec-POMDPs.
-"""
-function PolicyIteration(dec_pomdp::DecTigerPOMDP, initial_controllers::Vector{FiniteStateController}; 
-                        max_iterations=10, epsilon=0.1)
-    # Number of agents
-    n_agents = 2
-    
-    # Initialize
-    tau = 0
-    controllers_tau = initial_controllers
-    
-    # Get maximum possible reward for convergence check
-    R_max = 20.0  # For Dec-Tiger, the max reward is +20
-    discount_factor = discount(dec_pomdp)
-    
-    # Main policy iteration loop
-    while true
-        println("Iteration $tau")
+        # Variables: weights for each other node
+        @variable(model, w[1:controller.num_nodes] >= 0)
         
-        # Backup and evaluate
-        new_controllers = Vector{FiniteStateController}()
+        # Constraint: weights sum to 1
+        @constraint(model, sum(w) == 1)
         
-        for i in 1:n_agents
-            # Get other agent controllers
-            other_agent_idx = i == 1 ? 2 : 1
-            other_agent_fsc = controllers_tau[other_agent_idx]
-            
-            # Perform exhaustive backup
-            new_fsc = ExhaustiveBackup(controllers_tau[i], dec_pomdp, i, other_agent_fsc)
-            push!(new_controllers, new_fsc)
-        end
+        # Constraint: weight of node being checked is 0
+        @constraint(model, w[node_to_check] == 0)
         
-        # Update controllers
-        controllers_tau = new_controllers
-        
-        # Compute value of joint controller
-        V = ComputeControllerValue(dec_pomdp, controllers_tau)
-        
-        # Prune dominated nodes until none can be removed
-        nodes_pruned = true
-        while nodes_pruned
-            nodes_pruned = false
-            
-            for i in 1:n_agents
-                # Get other agent controllers
-                other_agent_controllers = [controllers_tau[j] for j in 1:n_agents if j != i]
-                
-                # Prune dominated nodes
-                new_fsc, was_pruned = PruneNode(i, other_agent_controllers, controllers_tau[i], dec_pomdp)
-                
-                if was_pruned
-                    nodes_pruned = true
-                    controllers_tau[i] = new_fsc
+        # For each state and other agent's node, the value of this node should be
+        # less than or equal to the weighted sum of other nodes
+        for s in S
+            if agent_idx == 1
+                for other_node in 1:controllers[2].num_nodes
+                    # Get value of current node
+                    v_current = V[(s, node_to_check, other_node)]
                     
-                    # Update controller
-                    controllers_tau[i] = UpdateController(controllers_tau[i])
+                    # Add constraint: weighted sum of other nodes must have >= value
+                    @constraint(model, 
+                               sum(w[n] * V[(s, n, other_node)] for n in 1:controller.num_nodes) >= v_current)
+                end
+            else # agent_idx == 2
+                for other_node in 1:controllers[1].num_nodes
+                    # Get value of current node
+                    v_current = V[(s, other_node, node_to_check)]
                     
-                    # Recompute value
-                    V = ComputeControllerValue(dec_pomdp, controllers_tau)
+                    # Add constraint: weighted sum of other nodes must have >= value
+                    @constraint(model, 
+                               sum(w[n] * V[(s, other_node, n)] for n in 1:controller.num_nodes) >= v_current)
                 end
             end
         end
         
-        # Check for convergence
-        tau += 1
-        if tau >= max_iterations || discount_factor^(tau+1) * R_max <= epsilon * (1 - discount_factor)
-            break
-        end
-    end
-    
-    return controllers_tau
-end
-
-"""
-    CreateInitialControllers
-
-Creates initial finite state controllers for each agent.
-"""
-function CreateInitialControllers(dec_pomdp::DecTigerPOMDP, n_nodes::Int=2)
-    controllers = Vector{FiniteStateController}()
-    
-    for agent_idx in 1:2
-        nodes = Vector{NodeController}()
+        # Objective: maximize any slack (not necessary, we just need feasibility)
+        @objective(model, Max, 1)
         
-        for i in 1:n_nodes
-            # Assign random action
-            actions = ["listen", "open-left", "open-right"]
-            action = actions[rand(1:length(actions))]
+        # Solve the model
+        optimize!(model)
+        
+        # If a solution exists, the node is dominated and can be pruned
+        if termination_status(model) == MOI.OPTIMAL
+            # Node is dominated, get the dominating distribution
+            w_val = JuMP.value.(w)
             
-            # Create random transitions
-            transitions = Dict{String, Vector{Tuple{Float64, Int}}}()
-            for obs in ["hear-left", "hear-right"]
-                transitions[obs] = [(1.0, rand(1:n_nodes))]
+            # Create new controller without the dominated node
+            new_action_map = Dict{Int, String}()
+            new_transition_map = Dict{Int, Dict{String, Int}}()
+            
+            # Copy non-dominated nodes
+            new_idx = 1
+            old_to_new = Dict{Int, Int}()
+            
+            for old_idx in 1:controller.num_nodes
+                if old_idx != node_to_check
+                    new_action_map[new_idx] = controller.action_map[old_idx]
+                    new_transition_map[new_idx] = Dict{String, Int}()
+                    old_to_new[old_idx] = new_idx
+                    new_idx += 1
+                end
             end
             
-            push!(nodes, NodeController(i, action, transitions))
-        end
-        
-        push!(controllers, FiniteStateController(nodes, 1))
-    end
-    
-    return controllers
-end
-
-"""
-    EvaluateControllers
-
-Evaluates a joint controller by simulating the Dec-POMDP.
-"""
-function EvaluateControllers(dec_pomdp::DecTigerPOMDP, controllers::Vector{FiniteStateController}, 
-                            n_episodes::Int=100, max_steps::Int=20)
-    total_reward = 0.0
-    
-    for episode in 1:n_episodes
-        # Initialize state
-        state_dist = initialstate(dec_pomdp)
-        state = rand(state_dist)
-        
-        # Initialize controller nodes
-        controller_nodes = [controllers[i].initial_node for i in 1:2]
-        
-        episode_reward = 0.0
-        discount_factor = discount(dec_pomdp)
-        
-        for step in 1:max_steps
-            # Get actions from controller nodes
-            a1 = controllers[1].nodes[controller_nodes[1]].action
-            a2 = controllers[2].nodes[controller_nodes[2]].action
-            joint_action = (a1, a2)
+            # Update transitions (note: this is simplified, actual implementation would need
+            # to handle stochastic transitions based on the convex combination)
+            # For simplicity, we'll use the highest weight node as the replacement
+            replacement_node = argmax([i != node_to_check ? w_val[i] : -Inf for i in 1:controller.num_nodes])
             
-            # Get reward
-            r = reward(dec_pomdp, state, joint_action)
-            episode_reward += (discount_factor ^ (step - 1)) * r
-            
-            # Get next state
-            next_state_dist = transition(dec_pomdp, state, joint_action)
-            next_state = rand(next_state_dist)
-            
-            # Get observations
-            obs_dist = observation(dec_pomdp, joint_action, next_state)
-            joint_obs = rand(obs_dist)
-            
-            # Update controller nodes
-            for i in 1:2
-                obs = joint_obs[i]
-                # Follow the transitions in the controller
-                next_node_dist = controllers[i].nodes[controller_nodes[i]].transitions[obs]
-                # Sample from distribution
-                rand_val = rand()
-                cumulative_prob = 0.0
-                for (prob, next_node) in next_node_dist
-                    cumulative_prob += prob
-                    if rand_val <= cumulative_prob
-                        controller_nodes[i] = next_node
-                        break
+            for old_idx in 1:controller.num_nodes
+                if old_idx != node_to_check
+                    new_idx = old_to_new[old_idx]
+                    
+                    for obs in keys(controller.transition_map[old_idx])
+                        next_node = controller.transition_map[old_idx][obs]
+                        
+                        if next_node == node_to_check
+                            # If transitioning to pruned node, redirect to replacement
+                            new_transition_map[new_idx][obs] = old_to_new[replacement_node]
+                        else
+                            # Otherwise, update to new index
+                            new_transition_map[new_idx][obs] = old_to_new[next_node]
+                        end
                     end
                 end
             end
             
-            # Update state
-            state = next_state
+            return FiniteStateController(controller.num_nodes - 1, new_action_map, new_transition_map), true
         end
-        
-        total_reward += episode_reward
     end
     
-    return total_reward / n_episodes
+    # If we get here, no node could be pruned
+    return controller, false
 end
 
-# Usage example:
-function solve_dec_tiger()
-    # Create Dec-Tiger POMDP
-    dec_tiger = DecTigerPOMDP()
+# Main policy iteration algorithm
+function policy_iteration(pomdp::DecTigerPOMDP, epsilon::Float64=0.01)
+    # Get problem information
+    S = states(pomdp)
+    joint_actions = actions(pomdp)
+    joint_observations = observations(pomdp)
     
-    # Create initial controllers
-    initial_controllers = CreateInitialControllers(dec_tiger, 2)
+    # Extract individual actions and observations
+    agent_actions = ["listen", "open-left", "open-right"]
+    agent_observations = ["hear-left", "hear-right"]
     
-    # Run policy iteration
-    final_controllers = PolicyIteration(dec_tiger, initial_controllers, max_iterations=5)
+    # Initialize controllers for both agents
+    controllers = [
+        create_initial_controller(agent_actions, agent_observations),
+        create_initial_controller(agent_actions, agent_observations)
+    ]
     
-    # Evaluate the controllers
-    avg_reward = EvaluateControllers(dec_tiger, final_controllers)
+    # Maximum possible reward (used for termination condition)
+    R_max = max(
+        abs(pomdp.listen_cost),
+        abs(pomdp.tiger_penalty),
+        abs(pomdp.escape_reward),
+        abs(pomdp.open_same_doors_penalty),
+        abs(pomdp.one_listens_one_opens_cost)
+    )
     
-    println("Average reward: $avg_reward")
+    gamma = discount(pomdp)
+    iteration = 0
     
-    return final_controllers
+    while true
+        iteration += 1
+        println("Policy iteration step: $iteration")
+        
+        # Perform exhaustive backup for each agent
+        for i in 1:2
+            controllers[i] = exhaustive_backup(controllers[i], agent_actions, agent_observations)
+            println("  Agent $i controller size after backup: $(controllers[i].num_nodes) nodes")
+        end
+        
+        # Evaluate joint controller
+        V = evaluate_joint_controller(pomdp, controllers)
+        
+        # Prune dominated nodes until no more can be removed
+        pruned_something = true
+        while pruned_something
+            pruned_something = false
+            
+            for i in 1:2
+                println("  Pruning agent $i controller (current size: $(controllers[i].num_nodes))")
+                new_controller, was_pruned = prune_controller(pomdp, i, controllers, V)
+                
+                if was_pruned
+                    controllers[i] = new_controller
+                    # Re-evaluate after pruning
+                    V = evaluate_joint_controller(pomdp, controllers)
+                    pruned_something = true
+                    println("    Pruned to $(controllers[i].num_nodes) nodes")
+                end
+            end
+        end
+        
+        # Check termination condition: γ^(t+1) * |R_max| / (1-γ) <= ε
+        bound = (gamma^(iteration+1) * R_max) / (1 - gamma)
+        println("  Current error bound: $bound (target: $epsilon)")
+        
+        if bound <= epsilon
+            println("Policy iteration converged after $iteration iterations")
+            break
+        end
+    end
+    
+    return controllers, V
 end
+
+# Create the Dec-Tiger POMDP
+dec_tiger = DecTigerPOMDP()
+
+# Run policy iteration
+controllers, V = policy_iteration(dec_tiger, 0.01)
+
+# Display controller information
+for (i, controller) in enumerate(controllers)
+    println("Agent $i controller:")
+    println("  Number of nodes: $(controller.num_nodes)")
+    
+    for node in 1:controller.num_nodes
+        println("  Node $node:")
+        println("    Action: $(controller.action_map[node])")
+        println("    Transitions:")
+        
+        for (obs, next_node) in controller.transition_map[node]
+            println("      On observation '$obs' -> Node $next_node")
+        end
+    end
+end
+
+# Display value function for initial belief
+s0_dist = initialstate(dec_tiger)
+initial_value = 0.0
+
+for s in states(dec_tiger)
+    s_prob = pdf(s0_dist, s)
+    for n1 in 1:controllers[1].num_nodes
+        for n2 in 1:controllers[2].num_nodes
+            # We could weight by initial controller node distribution
+            # Here assuming uniform initial distribution over controller nodes
+            node_prob = 1.0 / (controllers[1].num_nodes * controllers[2].num_nodes)
+            initial_value += s_prob * node_prob * V[(s, n1, n2)]
+        end
+    end
+end
+
+println("Expected value of joint policy: $initial_value")
