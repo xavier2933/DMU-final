@@ -5,7 +5,9 @@ module SatelliteSim
     using DiscreteValueIteration: ValueIterationSolver
     using IterTools: product
     using Distributions: Categorical, pdf, rand
-    export create_simulation, run_policy
+    export create_simulation, run_policy, pomcp_solve, simulate_pomcp_policy
+    using BasicPOMCP
+
 
     
     function create_simulation( ; 
@@ -97,17 +99,17 @@ module SatelliteSim
     
 
     function run_policy(pomdp)
-        @show solver = ValueIterationSolver()
-        println("mdp?")
+        solver = ValueIterationSolver()
         mdp = UnderlyingMDP(pomdp)  # Convert the POMDP into an MDP for planning
-        num_states = length(states(mdp))
-        num_actions = length(actions(mdp))
-        println("MDP Dimensions:")
-        println("  Number of states: ", num_states)
-        println("  Number of actions: ", num_actions)
-        println("solving")
-        policy = solve(solver, mdp)
+
+        state_list = ordered_states(mdp)
+        action_list = ordered_actions(mdp)
         
+        println("State space size: ", length(state_list))
+        println("Action space size: ", length(action_list))
+        
+        policy = solve(solver, mdp)
+    
         s = rand(initialstate(pomdp))  # Draw initial state from distribution
         println("Initial state: ", s)
     
@@ -144,5 +146,108 @@ module SatelliteSim
             end
         end
     end
+
+    function pomcp_solve(m) # this function makes capturing m in the rollout policy more efficient
+        c_val = 50.0
+        println("C=$c_val")
+        mdp = UnderlyingMDP(m)
+        
+        # solve mdp to get decent policy for rollout
+        mdp_solver = ValueIterationSolver(max_iterations=1000)
+        mdp_policy = solve(mdp_solver, mdp)
+
+        solver = POMCPSolver(tree_queries=10,
+                            c=c_val,
+                            max_time = 0.5, # this should be enough time to get a score in the 30s
+                            default_action=:ground,
+                            estimate_value=FORollout(mdp_policy))
+        pomcp_p = solve(solver, m)
+        return pomcp_p
+    end
+
+    function simulate_pomcp_policy(pomcp_p, pomdp; num_steps=10, verbose=true)
+        # Initialize state
+        s = rand(initialstate(pomdp))
+        
+        total_reward = 0.0
+        
+        if verbose
+            println("Initial state: ", s)
+        end
+        
+        # Run simulation for specified number of steps
+        for t in 1:num_steps
+            if isterminal(pomdp, s)
+                if verbose
+                    println("Reached terminal state: ", s)
+                end
+                break
+            end
+            
+            # Select action using the POMCP policy
+            a = action(pomcp_p, s)
+            
+            if verbose
+                println("t=$t | state=$s | action=$a")
+            end
+            
+            # Try to get next state directly from your model
+            # Since we're having issues with the transition function
+            sp = nothing
+            try
+                # Try to get the next state without using transition function
+                # If you have a custom function, use that instead
+                sp = next_state(pomdp, s, a)
+            catch e
+                if verbose
+                    println("Error getting next state: ", e)
+                    println("Ending simulation.")
+                end
+                break
+            end
+            
+            # If we couldn't get a next state, end the simulation
+            if sp === nothing
+                if verbose
+                    println("Could not determine next state, ending simulation.")
+                end
+                break
+            end
+            
+            # Update state
+            s = sp
+        end
+        
+        if verbose
+            println("Simulation ended.")
+        end
+        
+        return total_reward
+    end
+    
+    # Helper function to get next state without using transition
+    function next_state(pomdp, s, a)
+        # This is a placeholder - replace with your specific state transition logic
+        # Example implementation:
+        if a == :ground
+            # Logic for ground action
+            # For example, update the first element to indicate completed ground action
+            new_s = collect(s)
+            new_s[1] = 1  # Set first element to 1
+            return Tuple(new_s)
+        elseif a isa Integer || a isa Symbol
+            # Logic for satellite actions
+            # For example, update the corresponding satellite element
+            new_s = collect(s)
+            if a isa Integer && 1 <= a <= length(new_s)
+                new_s[a] = 1  # Update the satellite state
+            end
+            return Tuple(new_s)
+        else
+            # Handle other action types
+            return s  # Return same state if action not recognized
+        end
+    end
+
     
 end  # module SatelliteSim
