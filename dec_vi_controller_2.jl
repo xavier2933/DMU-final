@@ -454,9 +454,10 @@ function dec_pomdp_pi(controller::JointController, prob)
     # Initial evaluation
     V_prev, _ = evaluate_controller(ctrlr_t, prob)
     println("Initial controller value: $(V_prev)")
-    
+    improvement = 1000000
+    V_curr = -100000
     # Main policy iteration loop
-    while it < 30
+    while it < 30 && improvement > 0.01 && V_curr < 0
         improved = false
         
         # [Backup and evaluate]
@@ -478,31 +479,31 @@ function dec_pomdp_pi(controller::JointController, prob)
         println("After backup, controller value: $(V_curr)")
         
         # Check for improvement
-        # [Prune dominated nodes until none can be removed]
-        pruned_any = true
-        while pruned_any
-            pruned_any = false
+        # # [Prune dominated nodes until none can be removed]
+        # pruned_any = true
+        # while pruned_any
+        #     pruned_any = false
             
-            for i in 1:n
-                # Create a list of other controllers
-                other_controllers = [ctrlr_t.controllers[j] for j in 1:n if j != i]
+        #     for i in 1:n
+        #         # Create a list of other controllers
+        #         other_controllers = [ctrlr_t.controllers[j] for j in 1:n if j != i]
                 
-                # Try to prune agent i's controller
-                new_controller, was_pruned = prune_controller(i, ctrlr_t.controllers[i], other_controllers, prob)
+        #         # Try to prune agent i's controller
+        #         new_controller, was_pruned = prune_controller(i, ctrlr_t.controllers[i], other_controllers, prob)
                 
-                if was_pruned
-                    ctrlr_t.controllers[i] = new_controller
-                    pruned_any = true
-                    println("Pruned agent $(i)'s controller to $(length(new_controller.nodes)) nodes")
-                end
-            end
+        #         if was_pruned
+        #             ctrlr_t.controllers[i] = new_controller
+        #             pruned_any = true
+        #             println("Pruned agent $(i)'s controller to $(length(new_controller.nodes)) nodes")
+        #         end
+        #     end
             
-            if pruned_any
-                # Re-evaluate after pruning
-                V_curr, _ = evaluate_controller(ctrlr_t, prob)
-                println("After pruning, controller value: $(V_curr)")
-            end
-        end
+        #     if pruned_any
+        #         # Re-evaluate after pruning
+        #         V_curr, _ = evaluate_controller(ctrlr_t, prob)
+        #         println("After pruning, controller value: $(V_curr)")
+        #     end
+        # end
 
         if V_curr > V_prev
             V_prev = V_curr
@@ -801,267 +802,6 @@ println("running")
 ctrl = create_heuristic_controller(dec_tiger)
 dec_pomdp_pi(ctrl, dec_tiger)
 
-function test_backup()
-    # Create a simple Dec-Tiger POMDP
-    prob = DecTigerPOMDP()
-    
-    # Create controllers for two agents
-    agent_controllers = Vector{AgentController}()
-    
-    for i in 1:2  # Two agents
-        # Create a single node - always performing "listen" action
-        node = FSCNode(
-            1,  # Action 1 is "listen"
-            Dict("hear-left" => 1, "hear-right" => 1)  # Always go back to node 1
-        )
-        
-        # Create an agent controller with the single node
-        ctrl = AgentController([node])
-        push!(agent_controllers, ctrl)
-    end
-    
-    # Create the joint controller
-    joint_ctrl = JointController(agent_controllers)
-    
-    # Evaluate the initial controller
-    initial_value, _ = evaluate_controller(joint_ctrl, prob)
-    println("Initial controller value: $(initial_value)")
-    println("Initial controller configuration:")
-    print_controller(joint_ctrl)
-    
-    # Test backup on the first agent's controller
-    println("\nTesting backup on agent 1...")
-    new_ctrl1 = exhaustive_backup(joint_ctrl.controllers[1])
-    
-    # Create a new joint controller with the backed-up controller
-    new_joint_ctrl = JointController([new_ctrl1, joint_ctrl.controllers[2]])
-    
-    # Evaluate the new controller
-    new_value, _ = evaluate_controller(new_joint_ctrl, prob)
-    println("\nAfter backing up agent 1:")
-    println("New controller value: $(new_value)")
-    println("New controller configuration:")
-    print_controller(new_joint_ctrl)
-    
-    # Did the value improve?
-    if new_value > initial_value
-        println("\nSuccess! The backup improved the value.")
-    else
-        println("\nWarning: Backup did not improve the value.")
-    end
-    
-    # Test backup on both agents
-    println("\nTesting backup on both agents...")
-    new_ctrl1 = exhaustive_backup(joint_ctrl.controllers[1])
-    new_ctrl2 = exhaustive_backup(joint_ctrl.controllers[2])
-    
-    new_joint_ctrl = JointController([new_ctrl1, new_ctrl2])
-    
-    # Evaluate the new controller
-    new_value, _ = evaluate_controller(new_joint_ctrl, prob)
-    println("\nAfter backing up both agents:")
-    println("New controller value: $(new_value)")
-    println("New controller configuration:")
-    print_controller(new_joint_ctrl)
-    
-    # Did the value improve?
-    if new_value > initial_value
-        println("\nSuccess! The backup improved the value.")
-    else
-        println("\nWarning: Backup did not improve the value.")
-    end
-end
-
-# Helper function to print controller configuration
-function print_controller(joint_controller)
-    for i in 1:length(joint_controller.controllers)
-        println("Agent $(i):")
-        for j in 1:length(joint_controller.controllers[i].nodes)
-            node = joint_controller.controllers[i].nodes[j]
-            println("  Node $(j):")
-            println("    Action: $(node.action)")
-            println("    Transitions:")
-            for (obs, next_node) in node.transitions
-                println("      On $(obs) -> Node $(next_node)")
-            end
-        end
-    end
-end
-
-# test_backup()
-
-function test_multiple_controllers(prob::DecTigerPOMDP)
-    # Create several different initial controllers to test
-    controllers = []
-    values = []
-    
-    # 1. Listen-only controller (both agents always listen)
-    joint_ctrl1 = create_listen_only_controller()
-    push!(controllers, joint_ctrl1)
-    
-    # 2. Tiger-avoidance controller (listen, then open the door opposite to what you hear)
-    joint_ctrl2 = create_tiger_avoidance_controller()
-    push!(controllers, joint_ctrl2)
-    
-    # 3. Random controller
-    joint_ctrl3 = create_random_controller(2, 3)  # 2 nodes, 3 actions
-    push!(controllers, joint_ctrl3)
-    
-    # 4. Coordinated door opening controller
-    joint_ctrl4 = create_coordinated_controller()
-    push!(controllers, joint_ctrl4)
-    
-    # Evaluate each controller
-    for (i, ctrl) in enumerate(controllers)
-        value, _ = evaluate_controller(ctrl, prob)
-        push!(values, value)
-        println("Controller $i value: $value")
-        println("Configuration:")
-        print_controller(ctrl)
-        println("\n")
-    end
-    
-    # Return the best controller
-    best_idx = argmax(values)
-    return controllers[best_idx], values[best_idx]
-end
-
-# Helper functions to create different controllers
-function create_listen_only_controller()
-    agent_controllers = Vector{AgentController}()
-    
-    for i in 1:2
-        # Create a single node that always listens
-        node = FSCNode(
-            1,  # Action 1 is "listen"
-            Dict("hear-left" => 1, "hear-right" => 1)  # Always go back to node 1
-        )
-        
-        ctrl = AgentController([node])
-        push!(agent_controllers, ctrl)
-    end
-    
-    return JointController(agent_controllers)
-end
-
-function create_tiger_avoidance_controller()
-    agent_controllers = Vector{AgentController}()
-    
-    for i in 1:2
-        # Create a controller with 2 nodes
-        # Node 1: Listen and transition based on what it hears
-        node1 = FSCNode(
-            1,  # Listen
-            Dict("hear-left" => 2, "hear-right" => 3)  # Go to node 2 if hear-left, node 3 if hear-right
-        )
-        
-        # Node 2: Open right door (assuming tiger is on left)
-        node2 = FSCNode(
-            3,  # Open right
-            Dict("hear-left" => 1, "hear-right" => 1)  # Back to listening
-        )
-        
-        # Node 3: Open left door (assuming tiger is on right)
-        node3 = FSCNode(
-            2,  # Open left
-            Dict("hear-left" => 1, "hear-right" => 1)  # Back to listening
-        )
-        
-        ctrl = AgentController([node1, node2, node3])
-        push!(agent_controllers, ctrl)
-    end
-    
-    return JointController(agent_controllers)
-end
-
-function create_random_controller(num_nodes, num_actions)
-    agent_controllers = Vector{AgentController}()
-    
-    for i in 1:2
-        nodes = []
-        for j in 1:num_nodes
-            action = rand(1:num_actions)
-            transitions = Dict(
-                "hear-left" => rand(1:num_nodes),
-                "hear-right" => rand(1:num_nodes)
-            )
-            push!(nodes, FSCNode(action, transitions))
-        end
-        
-        ctrl = AgentController(nodes)
-        push!(agent_controllers, ctrl)
-    end
-    
-    return JointController(agent_controllers)
-end
-
-function create_coordinated_controller()
-    # More sophisticated controller where agents coordinate
-    # Agent 1 listens and then signals with its action
-    # Agent 2 responds to agent 1's signal
-    
-    # Agent 1 controller
-    agent1_nodes = []
-    
-    # Node 1: Listen
-    node1_1 = FSCNode(
-        1,  # Listen
-        Dict("hear-left" => 2, "hear-right" => 3)  # Go to node 2 if hear-left, node 3 if hear-right
-    )
-    
-    # Node 2: Open left as a signal (tiger on left)
-    node1_2 = FSCNode(
-        2,  # Open left (signal)
-        Dict("hear-left" => 4, "hear-right" => 4)  # Go to node 4 after signaling
-    )
-    
-    # Node 3: Open right as a signal (tiger on right)
-    node1_3 = FSCNode(
-        3,  # Open right (signal)
-        Dict("hear-left" => 5, "hear-right" => 5)  # Go to node 5 after signaling
-    )
-    
-    # Node 4: Open right (after signaling tiger on left)
-    node1_4 = FSCNode(
-        3,  # Open right
-        Dict("hear-left" => 1, "hear-right" => 1)  # Back to listening
-    )
-    
-    # Node 5: Open left (after signaling tiger on right)
-    node1_5 = FSCNode(
-        2,  # Open left
-        Dict("hear-left" => 1, "hear-right" => 1)  # Back to listening
-    )
-    
-    push!(agent1_nodes, node1_1, node1_2, node1_3, node1_4, node1_5)
-    agent1_ctrl = AgentController(agent1_nodes)
-    
-    # Agent 2 controller - more responsive to agent 1's signals
-    agent2_nodes = []
-    
-    # Node 1: Listen
-    node2_1 = FSCNode(
-        1,  # Listen
-        Dict("hear-left" => 1, "hear-right" => 1)  # Keep listening until agent 1 signals
-    )
-    
-    # Node 2: Open right (responding to agent 1's left signal)
-    node2_2 = FSCNode(
-        3,  # Open right
-        Dict("hear-left" => 1, "hear-right" => 1)  # Back to listening
-    )
-    
-    # Node 3: Open left (responding to agent 1's right signal)
-    node2_3 = FSCNode(
-        2,  # Open left
-        Dict("hear-left" => 1, "hear-right" => 1)  # Back to listening
-    )
-    
-    push!(agent2_nodes, node2_1, node2_2, node2_3)
-    agent2_ctrl = AgentController(agent2_nodes)
-    
-    return JointController([agent1_ctrl, agent2_ctrl])
-end
 
 # prob = DecTigerPOMDP()
 # best_controller, best_value = test_multiple_controllers(prob)
