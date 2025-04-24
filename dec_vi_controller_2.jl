@@ -1,4 +1,5 @@
 using Pkg
+using Statistics
 Pkg.activate("dec_pomdp_env")  # Create a new environment
 include("dec_tiger.jl")  # Your Dec-Tiger implementation file
 
@@ -444,7 +445,7 @@ end
 function dec_pomdp_pi(controller::JointController, prob)
     # Initialize
     it = 0
-    epsilon = 0.01
+    epsilon = 0.01  # Desired precision
     R_max = find_maximum_absolute_reward(prob)
     gamma = prob.discount_factor
     
@@ -454,12 +455,13 @@ function dec_pomdp_pi(controller::JointController, prob)
     # Initial evaluation
     V_prev, _ = evaluate_controller(ctrlr_t, prob)
     println("Initial controller value: $(V_prev)")
-    improvement = 1000000
-    V_curr = -100000
-    # Main policy iteration loop
-    while it < 30 && improvement > 0.01 && V_curr < 0
-        improved = false
-        
+    
+    # Set initial values
+    V_curr = V_prev
+    improvement = Inf  # Start with infinite improvement to ensure first iteration
+    
+    # Main policy iteration loop with proper stopping condition
+    while it < 30 && improvement > epsilon
         # [Backup and evaluate]
         for i in 1:n
             println("Backing up agent $i...")
@@ -478,44 +480,28 @@ function dec_pomdp_pi(controller::JointController, prob)
         V_curr, _ = evaluate_controller(ctrlr_t, prob)
         println("After backup, controller value: $(V_curr)")
         
-        # Check for improvement
-        # # [Prune dominated nodes until none can be removed]
-        # pruned_any = true
-        # while pruned_any
-        #     pruned_any = false
-            
-        #     for i in 1:n
-        #         # Create a list of other controllers
-        #         other_controllers = [ctrlr_t.controllers[j] for j in 1:n if j != i]
-                
-        #         # Try to prune agent i's controller
-        #         new_controller, was_pruned = prune_controller(i, ctrlr_t.controllers[i], other_controllers, prob)
-                
-        #         if was_pruned
-        #             ctrlr_t.controllers[i] = new_controller
-        #             pruned_any = true
-        #             println("Pruned agent $(i)'s controller to $(length(new_controller.nodes)) nodes")
-        #         end
-        #     end
-            
-        #     if pruned_any
-        #         # Re-evaluate after pruning
-        #         V_curr, _ = evaluate_controller(ctrlr_t, prob)
-        #         println("After pruning, controller value: $(V_curr)")
-        #     end
-        # end
-
-        if V_curr > V_prev
-            V_prev = V_curr
-            improved = true
-            println("Iteration $it improved value to: $V_curr")
-        end
-        
-        # Calculate improvement
+        # Calculate improvement (absolute difference)
         improvement = abs(V_curr - V_prev)
+        println("Improvement: $(improvement)")
+        
+        # Update previous value for next iteration
+        V_prev = V_curr
         
         it += 1
         println("Completed iteration $(it)")
+        
+        # Additional stopping condition based on convergence formula
+        if (gamma^it * R_max) < epsilon
+            println("Theoretical bound reached, algorithm converged.")
+            break
+        end
+    end
+    
+    # Report reason for stopping
+    if it >= 30
+        println("Stopped due to maximum iterations reached.")
+    elseif improvement <= epsilon
+        println("Stopped due to convergence (improvement below threshold).")
     end
     
     return it, ctrlr_t
@@ -800,9 +786,118 @@ end
 println("running")
 
 ctrl = create_heuristic_controller(dec_tiger)
-dec_pomdp_pi(ctrl, dec_tiger)
+_, controller = dec_pomdp_pi(ctrl, dec_tiger)
 
+function verify_controller(joint_controller::JointController, prob::DecTigerPOMDP, num_episodes=10000, max_steps=20)
+    total_reward = 0.0
+    rewards_per_episode = []
+    
+    # Track statistics
+    door_opened_correctly = 0
+    door_opened_incorrectly = 0
+    episodes_with_pos_reward = 0
+    
+    # For each episode
+    for episode in 1:num_episodes
+        # Initialize state randomly
+        state = rand(["tiger-left", "tiger-right"])
+        # Start at initial nodes
+        nodes = [1, 1]  # Assuming first node is initial node
+        episode_reward = 0.0
+        
+        # Run for max_steps or until door is opened
+        for step in 1:max_steps
+            # Get actions from current nodes
+            actions = [joint_controller.controllers[i].nodes[nodes[i]].action 
+                       for i in 1:2]
+            
+            # Convert action indices to names for readability
+            action_names = ["listen", "open-left", "open-right"]
+            action1 = action_names[actions[1]]
+            action2 = action_names[actions[2]]
+            
+            # Compute reward
+            step_reward = compute_reward(state, actions, action_names)
+            episode_reward += step_reward
+            
+            # Check if doors were opened
+            if action1 != "listen" || action2 != "listen"
+                if step_reward > 0
+                    door_opened_correctly += 1
+                elseif step_reward < -10
+                    door_opened_incorrectly += 1
+                end
+                
+                # Reset state after door opening
+                state = rand(["tiger-left", "tiger-right"])
+            end
+            
+            # Generate observations
+            observations = []
+            for i in 1:2
+                if actions[i] == 1  # Listen
+                    # Correct observation with 85% probability
+                    if state == "tiger-left"
+                        obs = rand() < 0.85 ? "hear-left" : "hear-right"
+                    else
+                        obs = rand() < 0.85 ? "hear-right" : "hear-left"
+                    end
+                else
+                    # After opening a door, observation is random
+                    obs = rand(["hear-left", "hear-right"])
+                end
+                push!(observations, obs)
+            end
+            
+            # Transition to next nodes
+            for i in 1:2
+                nodes[i] = joint_controller.controllers[i].nodes[nodes[i]].transitions[observations[i]]
+            end
+        end
+        
+        total_reward += episode_reward
+        push!(rewards_per_episode, episode_reward)
+        
+        if episode_reward > 0
+            episodes_with_pos_reward += 1
+        end
+    end
+    
+    # Calculate statistics
+    avg_reward = total_reward / num_episodes
+    std_dev = std(rewards_per_episode)
+    success_rate = episodes_with_pos_reward / num_episodes
+    
+    println("=== Controller Verification Results ===")
+    println("Average reward per episode: $avg_reward")
+    println("Standard deviation: $std_dev")
+    println("Episodes with positive reward: $(success_rate * 100)%")
+    println("Correct door openings: $door_opened_correctly")
+    println("Incorrect door openings: $door_opened_incorrectly")
+    println("Correct opening ratio: $(door_opened_correctly / (door_opened_correctly + door_opened_incorrectly))")
+    
+    # Analyze controller structure
+    println("\n=== Controller Structure Analysis ===")
+    for i in 1:2
+        println("Agent $i controller has $(length(joint_controller.controllers[i].nodes)) nodes")
+        # Count action distribution
+        action_counts = zeros(Int, 3)
+        for node in joint_controller.controllers[i].nodes
+            action_counts[node.action] += 1
+        end
+        
+        for a in 1:3
+            action_name = ["listen", "open-left", "open-right"][a]
+            percentage = action_counts[a] / length(joint_controller.controllers[i].nodes) * 100
+            println("  $action_name: $(round(percentage, digits=1))%")
+        end
+    end
+    
+    return avg_reward, success_rate
+end
 
+m = DecTigerPOMDP()
+verify_controller(controller, m)
 # prob = DecTigerPOMDP()
 # best_controller, best_value = test_multiple_controllers(prob)
 # println("Best controller found with value: $best_value")
