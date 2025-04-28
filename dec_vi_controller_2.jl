@@ -62,36 +62,6 @@ function create_heuristic_controller(prob::DecTigerPOMDP)
     return JointController(agent_controllers)
 end
 
-function compute_reward(state, joint_action, actions)
-    # Convert indices back to action names for readability
-    action1 = actions[joint_action[1]]
-    action2 = actions[joint_action[2]]
-    
-    if action1 == "listen" && action2 == "listen"
-        return -2.0  # Both agents listen
-    end
-    
-    # At least one agent opens a door
-    if state == "tiger-left"
-        # Tiger is on the left
-        if action1 == "open-right" && action2 == "open-right"
-            return 20.0  # Both open correct door
-        elseif action1 == "open-left" && action2 == "open-left"
-            return -50.0  # Both open tiger door
-        else
-            return -15.0  # Mixed door opening
-        end
-    else  # state == "tiger-right"
-        # Tiger is on the right
-        if action1 == "open-left" && action2 == "open-left"
-            return 20.0  # Both open correct door
-        elseif action1 == "open-right" && action2 == "open-right"
-            return -50.0  # Both open tiger door
-        else
-            return -15.0  # Mixed door opening
-        end
-    end
-end
 
 function compute_observation_probability(state, joint_action, joint_obs, actions, observations)
     # Convert indices to action and observation names
@@ -172,8 +142,12 @@ function evaluate_controller(joint_controller::JointController, problem::DecTige
                                for i in 1:num_agents]
                 
                 # Compute immediate reward for this state and joint action
-                immediate_reward = compute_reward(state, joint_action, actions)
+                action1 = actions[joint_action[1]]
+                action2 = actions[joint_action[2]]
+                joint_action_strings = (action1, action2)
                 
+                # Now call the reward function with the correct types
+                immediate_reward = POMDPs.reward(problem, state, joint_action_strings)
                 # Expected future reward
                 future_reward = 0.0
                 
@@ -243,204 +217,6 @@ function evaluate_controller(joint_controller::JointController, problem::DecTige
     return value, V
 end
 
-# Prune dominated nodes from a controller
-function prune_controller(agent_idx::Int, controller::AgentController, 
-                         other_controllers::Vector{AgentController}, 
-                         problem::DecTigerPOMDP)
-    
-    # Get current nodes in controller
-    nodes = controller.nodes
-    num_nodes = length(nodes)
-    
-    # If we have only one node, we can't prune
-    if num_nodes <= 1
-        return controller, false
-    end
-    
-    # Get information about the problem
-    states = ["tiger-left", "tiger-right"]
-    num_states = length(states)
-    
-    # Get information about other controllers
-    other_controller_sizes = [length(c.nodes) for c in other_controllers]
-    
-    # Create a matrix to store values for all combinations
-    # V[i, j, s] = value of node i when other agents are in joint config j and state is s
-    num_other_configs = prod(other_controller_sizes)
-    V = zeros(num_nodes, num_other_configs, num_states)
-    
-    # Populate the value matrix
-    # This would normally come from evaluating value function V(qi, q-i, s)
-    # For demonstration, we'll compute it on-the-fly
-    
-    # Create all possible configurations of other agents' nodes
-    other_config_indices = collect(Iterators.product([1:size for size in other_controller_sizes]...))
-    
-    # For each node in our controller
-    for node_idx in 1:num_nodes
-        # For each configuration of other agents' nodes
-        for (config_idx, other_config) in enumerate(other_config_indices)
-            # For each state
-            for state_idx in 1:num_states
-                state = states[state_idx]
-                
-                # Get actions for this agent and other agents
-                action = nodes[node_idx].action
-                other_actions = [other_controllers[i].nodes[other_config[i]].action 
-                                for i in 1:length(other_controllers)]
-                
-                # Convert to joint action
-                joint_action = vcat(action, other_actions)
-                
-                # Compute immediate reward
-                immediate_reward = compute_reward(state, joint_action, ["listen", "open-left", "open-right"])
-                
-                # Compute expected future reward (this would be more complex in practice)
-                # For demonstration, we'll use a simplified approach
-                future_reward = 0.0
-                
-                # Calculate total value
-                V[node_idx, config_idx, state_idx] = immediate_reward + future_reward
-            end
-        end
-    end
-    
-    # Now check for dominance between nodes
-    pruned_nodes = []
-    pruned_any = false
-    
-    # Find the best node (highest average value)
-    best_node_idx = 1
-    best_node_value = -Inf
-    
-    for node_idx in 1:num_nodes
-        node_avg_value = mean(V[node_idx, :, :])
-        if node_avg_value > best_node_value
-            best_node_value = node_avg_value
-            best_node_idx = node_idx
-        end
-    end
-    
-    # For each node (except the best node)
-    for node_idx in 1:num_nodes
-        # Don't prune the best node
-        if node_idx == best_node_idx
-            continue
-        end
-        
-        # Try to find if this node is dominated
-        is_dominated = false
-        dominating_node = 0
-        
-        for other_node in 1:num_nodes
-            if other_node == node_idx
-                continue
-            end
-            
-            # Check if other_node dominates node_idx
-            dominates = true
-            
-            for config_idx in 1:num_other_configs
-                for state_idx in 1:num_states
-                    if V[other_node, config_idx, state_idx] < V[node_idx, config_idx, state_idx]
-                        dominates = false
-                        break
-                    end
-                end
-                if !dominates
-                    break
-                end
-            end
-            
-            if dominates
-                is_dominated = true
-                dominating_node = other_node
-                break
-            end
-        end
-        
-        if is_dominated
-            push!(pruned_nodes, (node_idx, dominating_node))
-            pruned_any = true
-        end
-    end
-    
-    # If no nodes were dominated, return the original controller
-    if !pruned_any
-        return controller, false
-    end
-    
-    # Create a new controller without the dominated nodes
-    new_nodes = []
-    
-    # Create a mapping from old node indices to new ones
-    node_map = Dict{Int, Int}()
-    new_idx = 1
-    
-    for old_idx in 1:num_nodes
-        # Check if this node was pruned
-        pruned = false
-        for (pruned_idx, _) in pruned_nodes
-            if old_idx == pruned_idx
-                pruned = true
-                break
-            end
-        end
-        
-        if !pruned
-            # Add this node to the new controller
-            push!(new_nodes, deepcopy(nodes[old_idx]))
-            node_map[old_idx] = new_idx
-            new_idx += 1
-        end
-    end
-    
-    # If we've somehow pruned all nodes, keep the best node
-    if length(new_nodes) == 0
-        println("Warning: Attempted to prune all nodes. Keeping the best node.")
-        push!(new_nodes, deepcopy(nodes[best_node_idx]))
-        node_map[best_node_idx] = 1
-    end
-    
-    # Fix for the KeyError - also map pruned nodes to their dominating node's new index
-    for (pruned_idx, dominating_idx) in pruned_nodes
-        # Make sure the dominating node has a mapping
-        if haskey(node_map, dominating_idx)
-            node_map[pruned_idx] = node_map[dominating_idx]
-        else
-            # If the dominating node was also pruned, follow the chain
-            # This is a simplification - ideally we'd resolve the full chain of dominance
-            for (p_idx, d_idx) in pruned_nodes
-                if p_idx == dominating_idx && haskey(node_map, d_idx)
-                    node_map[pruned_idx] = node_map[d_idx]
-                    break
-                end
-            end
-            
-            # If we still don't have a mapping, default to node 1
-            if !haskey(node_map, pruned_idx)
-                node_map[pruned_idx] = 1
-            end
-        end
-    end
-    
-    # Update transitions in the remaining nodes
-    for node in new_nodes
-        for obs in keys(node.transitions)
-            old_next = node.transitions[obs]
-            
-            # Use the node mapping to update the transition
-            if haskey(node_map, old_next)
-                node.transitions[obs] = node_map[old_next]
-            else
-                # Fallback to node 1 if mapping doesn't exist
-                node.transitions[obs] = 1
-            end
-        end
-    end
-    
-    return AgentController(new_nodes), true
-end
 
 function dec_pomdp_pi(controller::JointController, prob)
     # Initialize
@@ -646,142 +422,6 @@ function improved_exhaustive_backup(controller::AgentController, joint_controlle
     end
 end
 
-function test_controller(controller::JointController, problem::DecTigerPOMDP; 
-                        num_episodes=1000, max_steps=20)
-    total_reward = 0.0
-    
-    for episode in 1:num_episodes
-        # Reset the environment
-        current_state = rand(["tiger-left", "tiger-right"])
-        
-        # Initialize controller nodes (start at first node for each agent)
-        current_nodes = [1, 1]
-        
-        episode_reward = 0.0
-        
-        # Run one episode
-        for step in 1:max_steps
-            # Get actions from the controller nodes
-            actions = []
-            for agent_idx in 1:2
-                agent_controller = controller.controllers[agent_idx]
-                node = agent_controller.nodes[current_nodes[agent_idx]]
-                
-                if node.action == 1
-                    push!(actions, "listen")
-                elseif node.action == 2
-                    push!(actions, "open-left")
-                else
-                    push!(actions, "open-right")
-                end
-            end
-            
-            # Execute actions and get reward
-            step_reward = 0.0
-            
-            # Simplified Dec-Tiger reward logic
-            if actions[1] == "listen" && actions[2] == "listen"
-                step_reward = -2.0  # Both agents listen
-            elseif actions[1] == "listen" || actions[2] == "listen"
-                step_reward = -1.0  # One agent listens
-            else
-                # Both agents open doors
-                if current_state == "tiger-left"
-                    if actions[1] == "open-right" && actions[2] == "open-right"
-                        step_reward = 20.0  # Both open correct door
-                    elseif actions[1] == "open-left" && actions[2] == "open-left"
-                        step_reward = -50.0  # Both open tiger door
-                    else
-                        step_reward = -15.0  # Mixed door opening
-                    end
-                else  # tiger-right
-                    if actions[1] == "open-left" && actions[2] == "open-left"
-                        step_reward = 20.0  # Both open correct door
-                    elseif actions[1] == "open-right" && actions[2] == "open-right"
-                        step_reward = -50.0  # Both open tiger door
-                    else
-                        step_reward = -15.0  # Mixed door opening
-                    end
-                end
-                
-                # Reset the state after door opening
-                current_state = rand(["tiger-left", "tiger-right"])
-            end
-            
-            episode_reward += step_reward
-            
-            # Generate observations
-            observations = []
-            for agent_idx in 1:2
-                if actions[agent_idx] == "listen"
-                    # Correct observation 85% of the time
-                    if rand() < 0.85
-                        push!(observations, current_state == "tiger-left" ? "hear-left" : "hear-right")
-                    else
-                        push!(observations, current_state == "tiger-left" ? "hear-right" : "hear-left")
-                    end
-                else
-                    # If door was opened, observation doesn't matter (uniform random)
-                    push!(observations, rand(["hear-left", "hear-right"]))
-                end
-            end
-            
-            # Update controller nodes based on observations
-            for agent_idx in 1:2
-                obs = observations[agent_idx]
-                agent_controller = controller.controllers[agent_idx]
-                next_node = agent_controller.nodes[current_nodes[agent_idx]].transitions[obs]
-                current_nodes[agent_idx] = next_node
-            end
-        end
-        
-        total_reward += episode_reward
-    end
-    
-    average_reward = total_reward / num_episodes
-    
-    println("Controller with [$(length(controller.controllers[1].nodes)), $(length(controller.controllers[2].nodes))] nodes")
-    println("Average reward over $(num_episodes) episodes: $(average_reward)")
-    
-    return average_reward
-end
-
-# Simple function to compare initial and improved controllers
-function compare_controllers()
-    dec_tiger = DecTigerPOMDP()
-    
-    # Create initial controller
-    initial_controller = create_initial_controller(dec_tiger)
-    
-    # Test initial controller
-    println("\nTesting initial controller:")
-    initial_reward = test_controller(initial_controller, dec_tiger)
-    
-    # Run policy iteration
-    println("\nRunning policy iteration...")
-    _, improved_controller = dec_pomdp_pi(initial_controller, dec_tiger)
-    
-    # Test improved controller
-    println("\nTesting improved controller:")
-    improved_reward = test_controller(improved_controller, dec_tiger)
-    
-    # Print comparison
-    println("\nResults comparison:")
-    println("Initial controller reward: $(initial_reward)")
-    println("Improved controller reward: $(improved_reward)")
-    println("Improvement: $(improved_reward - initial_reward)")
-    
-    return improved_controller
-end
-
-# Run the comparison
-# compare_controllers()
-
-# Run the test
-# test_result = test_policy_iteration()
-
-# @show dec_tiger = DecTigerPOMDP()
-# @show states(dec_tiger)
 
 println("running")
 
@@ -816,8 +456,10 @@ function verify_controller(joint_controller::JointController, prob::DecTigerPOMD
             action1 = action_names[actions[1]]
             action2 = action_names[actions[2]]
             
-            # Compute reward
-            step_reward = compute_reward(state, actions, action_names)
+            joint_action_strings = (action1, action2)
+
+            # Now call the reward function with the correct types
+            step_reward = POMDPs.reward(prob, state, joint_action_strings)
             episode_reward += step_reward
             
             # Check if doors were opened

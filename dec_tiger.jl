@@ -1,4 +1,4 @@
-# dec-tiger-pomdp.jl - modified version
+# dec_tiger.jl - modified version
 using POMDPs
 using POMDPTools: Deterministic, Uniform, SparseCat
 
@@ -130,52 +130,34 @@ function POMDPs.observation(m::DecTigerPOMDP, a::Tuple{String,String}, sp::Strin
 end
 
 # Define reward function
+# Define reward function
+# Define reward function - keeping the same function signature
 function POMDPs.reward(m::DecTigerPOMDP, s::String, a::Tuple{String,String})
     a1, a2 = a
     
-    # Both agents listen
     if a1 == "listen" && a2 == "listen"
-        return m.listen_cost
+        return -2.0  # Both agents listen
+    end
     
-    # Both agents open the same door with tiger
-    elseif a1 == "open-left" && a2 == "open-left" && s == "tiger-left"
-        return m.tiger_penalty
-    elseif a1 == "open-right" && a2 == "open-right" && s == "tiger-right"
-        return m.tiger_penalty
-        
-    # Both agents open the same door with no tiger
-    elseif a1 == "open-left" && a2 == "open-left" && s == "tiger-right"
-        return m.escape_reward
-    elseif a1 == "open-right" && a2 == "open-right" && s == "tiger-left"
-        return m.escape_reward
-        
-    # Agents open different doors
-    elseif (a1 == "open-left" && a2 == "open-right") || (a1 == "open-right" && a2 == "open-left")
-        return m.open_same_doors_penalty
-        
-    # One agent listens, one opens door with tiger
-    elseif a1 == "open-left" && a2 == "listen" && s == "tiger-left"
-        return m.one_listens_one_opens_cost
-    elseif a1 == "listen" && a2 == "open-right" && s == "tiger-right"
-        return m.one_listens_one_opens_cost
-    elseif a1 == "listen" && a2 == "open-left" && s == "tiger-left"
-        return m.one_listens_one_opens_cost
-    elseif a1 == "open-right" && a2 == "listen" && s == "tiger-right"
-        return m.one_listens_one_opens_cost
-        
-    # One agent listens, one escapes through door with no tiger
-    elseif a1 == "listen" && a2 == "open-right" && s == "tiger-left"
-        return 9.0  # one_escapes_reward
-    elseif a1 == "listen" && a2 == "open-left" && s == "tiger-right"
-        return 9.0  # one_escapes_reward
-    elseif a1 == "open-right" && a2 == "listen" && s == "tiger-left"
-        return 9.0  # one_escapes_reward
-    elseif a1 == "open-left" && a2 == "listen" && s == "tiger-right"
-        return 9.0  # one_escapes_reward
-    
-    # Default case (should not happen with this problem definition)
-    else
-        return 0.0
+    # At least one agent opens a door
+    if s == "tiger-left"
+        # Tiger is on the left
+        if a1 == "open-right" && a2 == "open-right"
+            return 20.0  # Both open correct door
+        elseif a1 == "open-left" && a2 == "open-left"
+            return -50.0  # Both open tiger door
+        else
+            return -15.0  # Mixed door opening
+        end
+    else  # s == "tiger-right"
+        # Tiger is on the right
+        if a1 == "open-left" && a2 == "open-left"
+            return 20.0  # Both open correct door
+        elseif a1 == "open-right" && a2 == "open-right"
+            return -50.0  # Both open tiger door
+        else
+            return -15.0  # Mixed door opening
+        end
     end
 end
 
