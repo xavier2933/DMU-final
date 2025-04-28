@@ -7,7 +7,7 @@ using POMDPTools: Deterministic, Uniform, SparseCat
 
 Implementation of the Dec-Tiger problem as described in the DPOMDP file.
 """
-struct DecTigerPOMDP <: POMDP{String, Tuple{String,String}, Tuple{String,String}}
+struct DecTigerPOMDP <: POMDP{String, Tuple{Vararg{String}}, Tuple{Vararg{String}}}
     discount_factor::Float64
     listen_cost::Float64
     tiger_penalty::Float64
@@ -15,9 +15,10 @@ struct DecTigerPOMDP <: POMDP{String, Tuple{String,String}, Tuple{String,String}
     open_same_doors_penalty::Float64
     one_listens_one_opens_cost::Float64
     p_correct_obs::Float64
+    num_agents::Int
 end
 
-# Default constructor with values from the DPOMDP file
+# Update constructor with default num_agents=2
 function DecTigerPOMDP(;
     discount_factor = 1.0,
     listen_cost = -2.0,
@@ -26,7 +27,8 @@ function DecTigerPOMDP(;
     open_same_doors_penalty = -100.0,
     one_listens_one_opens_cost = -101.0,
     one_escapes_reward = 9.0,
-    p_correct_obs = 0.85
+    p_correct_obs = 0.85,
+    num_agents = 2
 )
     return DecTigerPOMDP(
         discount_factor,
@@ -35,7 +37,8 @@ function DecTigerPOMDP(;
         escape_reward,
         open_same_doors_penalty,
         one_listens_one_opens_cost,
-        p_correct_obs
+        p_correct_obs,
+        num_agents
     )
 end
 
@@ -46,31 +49,54 @@ end
 
 # Define action space for each agent
 function POMDPs.actions(m::DecTigerPOMDP)
-    # Tuple of actions for both agents: (agent1_action, agent2_action)
     agent_actions = ["listen", "open-left", "open-right"]
-    joint_actions = Tuple{String,String}[]
     
-    for a1 in agent_actions
-        for a2 in agent_actions
-            push!(joint_actions, (a1, a2))
+    # Generate joint actions for all agents
+    # For 2 agents, this will generate tuples like ("listen", "listen"), etc.
+    # For 3 agents, it would generate ("listen", "listen", "listen"), etc.
+    joint_actions = Vector{NTuple{m.num_agents, String}}()
+    
+    # Start with a vector of the first action for each agent
+    current = fill(agent_actions[1], m.num_agents)
+    
+    # Use a recursive helper function to generate all combinations
+    function generate_actions(depth)
+        if depth > m.num_agents
+            push!(joint_actions, Tuple(current))
+            return
+        end
+        
+        for action in agent_actions
+            current[depth] = action
+            generate_actions(depth + 1)
         end
     end
     
+    generate_actions(1)
     return joint_actions
 end
 
-# Define observation space for each agent
 function POMDPs.observations(m::DecTigerPOMDP)
-    # Tuple of observations for both agents: (agent1_obs, agent2_obs)
     agent_obs = ["hear-left", "hear-right"]
-    joint_obs = Tuple{String,String}[]
     
-    for o1 in agent_obs
-        for o2 in agent_obs
-            push!(joint_obs, (o1, o2))
+    # Similar approach to actions
+    joint_obs = Vector{NTuple{m.num_agents, String}}()
+    
+    current = fill(agent_obs[1], m.num_agents)
+    
+    function generate_observations(depth)
+        if depth > m.num_agents
+            push!(joint_obs, Tuple(current))
+            return
+        end
+        
+        for obs in agent_obs
+            current[depth] = obs
+            generate_observations(depth + 1)
         end
     end
     
+    generate_observations(1)
     return joint_obs
 end
 

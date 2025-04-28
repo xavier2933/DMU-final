@@ -19,12 +19,10 @@ struct JointController
 end
 
 
-function create_heuristic_controller(prob::DecTigerPOMDP)
+function create_heuristic_controller(prob::POMDP)
     agent_controllers = Vector{AgentController}()
     
     for i in 1:2
-        # Create a controller based on a sensible strategy for Dec-Tiger
-        
         # Node 1: Listen
         node1 = FSCNode(
             1,  # Listen action
@@ -94,7 +92,7 @@ function compute_single_observation_probability(state, action, obs)
     end
 end
 
-function evaluate_controller(joint_controller::JointController, problem::DecTigerPOMDP)
+function evaluate_controller(joint_controller::JointController, problem::POMDP)
 
     states = ["tiger-left", "tiger-right"]
     actions = ["listen", "open-left", "open-right"]
@@ -248,7 +246,6 @@ function dec_pomdp_pi(controller::JointController, prob)
                 prob
             )
             
-            # Update the controller
             ctrlr_t.controllers[i] = new_controller
         end
         
@@ -284,7 +281,7 @@ function dec_pomdp_pi(controller::JointController, prob)
 end
 
 # Helper function to find the maximum absolute reward
-function find_maximum_absolute_reward(prob::DecTigerPOMDP)
+function find_maximum_absolute_reward(prob::POMDP)
     max_abs_reward = 0.0
     
     # Iterate through all states
@@ -305,22 +302,24 @@ function find_maximum_absolute_reward(prob::DecTigerPOMDP)
 end
 
 # Perform exhaustive backup on a controller
-function improved_exhaustive_backup(controller::AgentController, joint_controller::JointController, agent_idx::Int, prob::DecTigerPOMDP)
-    # First, keep track of the original controller
+function improved_exhaustive_backup(controller::AgentController, joint_controller::JointController, agent_idx::Int, prob::POMDP, num_agents::Int=2)
     original_controller = deepcopy(controller)
     
-    # Get the other agent's controller
-    other_agent_idx = agent_idx == 1 ? 2 : 1
-    other_controller = joint_controller.controllers[other_agent_idx]
+    # Extract individual agent actions from the joint actions
+    joint_actions = POMDPs.actions(prob)
     
-    # Create the initial set of candidate nodes (same as your original approach)
-    agent_actions = ["listen", "open-left", "open-right"]
-    agent_observations = ["hear-left", "hear-right"]
+    # Get unique actions for this specific agent
+    # For a tuple with num_agents elements, extract the agent_idx element
+    agent_actions = unique([a[agent_idx] for a in joint_actions])
+    
+    # Get individual agent observations
+    joint_observations = POMDPs.observations(prob)
+    agent_observations = unique([o[agent_idx] for o in joint_observations])
     
     current_nodes = length(controller.nodes)
     candidate_nodes = Vector{FSCNode}()
     
-    # Generate all possible new nodes (similar to your original approach)
+    # Generate all possible new nodes
     for action_idx in 1:length(agent_actions)
         num_observations = length(agent_observations)
         num_combinations = current_nodes^num_observations
@@ -344,7 +343,6 @@ function improved_exhaustive_backup(controller::AgentController, joint_controlle
     println("Current value before backup: $current_value")
     
     # Try each candidate node as a replacement for each existing node
-    # This is the key improvement step
     best_controller = deepcopy(controller)
     best_value = current_value
     improved = false
@@ -428,7 +426,7 @@ println("running")
 ctrl = create_heuristic_controller(dec_tiger)
 _, controller = dec_pomdp_pi(ctrl, dec_tiger)
 
-function verify_controller(joint_controller::JointController, prob::DecTigerPOMDP, num_episodes=10000, max_steps=20)
+function verify_controller(joint_controller::JointController, prob::POMDP, num_episodes=10000, max_steps=20)
     total_reward = 0.0
     rewards_per_episode = []
     
