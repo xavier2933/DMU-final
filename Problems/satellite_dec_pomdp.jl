@@ -278,14 +278,14 @@ function create_initial_controllers(m::SatelliteNetworkPOMDP)
         
         # Create nodes - one for each observation
         has_data_node = FSCNode(
-            # When has data: transmit for high-prob satellites, pass for low-prob satellites
-            findfirst(a -> a == (m.ground_tx_probs[sat_idx] > 0.5 ? "transmit" : 
-                      (sat_idx < m.num_satellites ? "pass-right" : "pass-left")), sat_actions),
+            # Randomly choose an action from available actions
+            rand(1:length(sat_actions)),
             Dict("has-data" => 1, "no-data" => 2)  # Stay in same node if has data
         )
         
         no_data_node = FSCNode(
-            findfirst(a -> a == "wait", sat_actions),  # Wait if no data
+            # Randomly choose an action, but with higher chance of waiting
+            rand([1, 1, 1, rand(2:length(sat_actions))]),  # 75% chance to wait
             Dict("has-data" => 1, "no-data" => 2)  # Switch to has-data node if gets data
         )
         

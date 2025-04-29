@@ -142,12 +142,12 @@ end
 
 # Create the problem
 sat_network = SatelliteNetworkPOMDP(
-    num_satellites = 4,
-    ground_tx_probs = [0.3, 0.5, 0.3, 0.95],
+    num_satellites = 3,
+    ground_tx_probs = [0.3, 0.5, 0.6],
     discount_factor = 0.9,
     pass_success_prob = 0.95,
     successful_tx_reward = 20.0,
-    unsuccessful_tx_penalty = -9.0,
+    unsuccessful_tx_penalty = -5.0,
     pass_cost = -1.0
 )
 
@@ -163,3 +163,4 @@ avg_reward, success_rate = verify_satellite_controller(final_controller, sat_net
 println("Policy iteration completed in $iterations iterations.")
 println("Final controller average reward: $avg_reward")
 println("Successful transmission rate: $(success_rate * 100)%")
+
