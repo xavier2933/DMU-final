@@ -8,6 +8,20 @@ A decentralized POMDP modeling a network of satellites that need to coordinate
 to transmit data to the ground. Each satellite can either pass data to its neighbors
 or attempt to transmit to ground with varying success probabilities.
 """
+
+struct FSCNode
+    action::Int  # Index of the action to take
+    transitions::Dict{String, Int}  # Observation -> next node mapping
+end
+
+struct AgentController
+    nodes::Vector{FSCNode}
+end
+
+struct JointController
+    controllers::Vector{AgentController}
+end
+
 struct SatelliteNetworkPOMDP <: POMDP{String, Tuple{Vararg{String}}, Tuple{Vararg{String}}}
     num_satellites::Int                # Number of satellites in the network
     discount_factor::Float64           # Discount factor for future rewards
@@ -281,7 +295,6 @@ function create_initial_controllers(m::SatelliteNetworkPOMDP)
     return JointController(controllers)
 end
 
-# Evaluation function (placeholder for your implementation)
 function evaluate_controller(joint_controller::JointController, prob::SatelliteNetworkPOMDP; 
                            max_iter=1000, tolerance=1e-6)
     # Get all possible states
