@@ -1,4 +1,4 @@
-include("../Solvers/dec_pi_MARescue")
+include("../Solvers/dec_pi_solver.jl")
 include("../Problems/satellite_dec_pomdp.jl")
 
 
