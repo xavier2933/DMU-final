@@ -3,6 +3,9 @@ using POMDPTools: Deterministic, Uniform, SparseCat
 using Statistics
 using Random
 
+include("../Solvers/dec_pi_packet_solver.jl")
+
+
 """
     MultiPacketSatelliteNetworkPOMDP
 
@@ -436,31 +439,25 @@ function POMDPs.observation(m::MultiPacketSatelliteNetworkPOMDP, a::Tuple{Vararg
     return SparseCat(possible_obs, obs_probs)
 end
 
-# Define reward function
 function POMDPs.reward(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tuple{Vararg{String}})
-    # If already in terminal state, no reward
+
     if s == "all-transmitted"
         return 0.0
     end
     
-    # Parse packet distribution
     packet_counts = parse_state(s)
     
     total_reward = 0.0
     
-    # Calculate rewards for each satellite's action
     for sat_idx in 1:m.num_satellites
         action = a[sat_idx]
         
         if startswith(action, "transmit-")
-            # Extract number of packets to transmit
             num_packets = parse(Int, split(action, "-")[2])
             
-            # Can't transmit more than you have
             actual_packets = min(num_packets, packet_counts[sat_idx])
             
             if actual_packets > 0
-                # Expected reward based on transmission probability
                 tx_prob = m.ground_tx_probs[sat_idx]
                 expected_success = actual_packets * tx_prob
                 expected_failure = actual_packets * (1 - tx_prob)
@@ -472,17 +469,14 @@ function POMDPs.reward(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tuple{
             parts = split(action, "-")
             num_packets = parse(Int, parts[3])
             
-            # Can't pass more than you have
             actual_packets = min(num_packets, packet_counts[sat_idx])
             
             if actual_packets > 0
-                # Cost for passing packets
                 total_reward += actual_packets * m.pass_cost
             end
         end
     end
     
-    # Penalty for congestion (satellites with too many packets)
     for count in packet_counts
         if count > m.max_capacity
             total_reward += (count - m.max_capacity) * m.congestion_penalty
@@ -492,63 +486,31 @@ function POMDPs.reward(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tuple{
     return total_reward
 end
 
-# Helper functions for working with individual agents
-
-# Get individual agent actions based on position
 function agent_actions(m::MultiPacketSatelliteNetworkPOMDP, sat_idx::Int)
-    actions = ["wait"]  # All satellites can wait
+    actions = ["wait"]  
     
-    # Transmit actions
-    for i in 1:m.max_capacity
-        push!(actions, "transmit-$i")
-    end
+    # MODIFICATION: Only allow transmitting 1 packet at a time
+    push!(actions, "transmit-1")  # Only 1 packet, not multiple
     
-    # Pass actions depend on satellite position
+    # MODIFICATION: Only allow passing 1 packet at a time
     if sat_idx > 1  # Can pass left if not leftmost
-        for i in 1:m.max_capacity
-            push!(actions, "pass-left-$i")
-        end
+        push!(actions, "pass-left-1")  # Only 1 packet, not multiple
     end
     
     if sat_idx < m.num_satellites  # Can pass right if not rightmost
-        for i in 1:m.max_capacity
-            push!(actions, "pass-right-$i")
-        end
+        push!(actions, "pass-right-1")  # Only 1 packet, not multiple
     end
     
     return actions
 end
 
-# General agent actions function for controller generation
-function agent_actions(m::MultiPacketSatelliteNetworkPOMDP)
-    # This returns a superset of all possible actions any satellite might take
-    actions = ["wait"]
-    
-    # Add transmit actions
-    for i in 1:m.max_capacity
-        push!(actions, "transmit-$i")
-    end
-    
-    # Add pass actions
-    for i in 1:m.max_capacity
-        push!(actions, "pass-left-$i")
-        push!(actions, "pass-right-$i")
-    end
-    
-    return actions
-end
 
-# Get observation strings for a given packet count
 function agent_observations(m::MultiPacketSatelliteNetworkPOMDP)
-    # For simplicity, return a subset of possible observations
-    # The real observation function will handle the probabilities
-    
+    # For simplicity, return a subset of possible observations    
     obs = []
     
-    # Add empty network observation
     push!(obs, join(zeros(Int, m.num_satellites), "-"))
     
-    # Add some common observations
     for p in partition_packets(m.num_satellites, m.total_packets, m.max_capacity)
         push!(obs, join(p, "-"))
     end
@@ -556,35 +518,25 @@ function agent_observations(m::MultiPacketSatelliteNetworkPOMDP)
     return obs
 end
 
-# Function to create an initial controller for policy iteration
 function create_initial_controllers(m::MultiPacketSatelliteNetworkPOMDP)
-    # Create a controller for each satellite
     controllers = AgentController[]
     
     for sat_idx in 1:m.num_satellites
-        # Get available actions for this satellite
         sat_actions = agent_actions(m, sat_idx)
         obs_list = agent_observations(m)
         
-        # Create a simple controller with nodes for different scenarios
         nodes = FSCNode[]
         
         # Create a node for when satellite has data
         has_data_node = FSCNode(
-            # Choose action based on satellite position and transmission probability
             sat_idx == m.num_satellites || m.ground_tx_probs[sat_idx] > 0.7 ? 
-                findfirst(a -> a == "transmit-1", sat_actions) :  # Transmit if last or high prob
-                findfirst(a -> a == "pass-right-1", sat_actions),  # Otherwise pass right
-            
-            # Simple transitions - stay in same state if obs shows we have data
+                findfirst(a -> a == "transmit-1", sat_actions) :
+                findfirst(a -> a == "pass-right-1", sat_actions),
             Dict(obs => has_packets(obs, sat_idx) ? 1 : 2 for obs in obs_list)
         )
         
-        # Create a node for when satellite doesn't have data
         no_data_node = FSCNode(
-            findfirst(a -> a == "wait", sat_actions),  # Wait if no data
-            
-            # Transition to has-data node if observation shows we have data
+            findfirst(a -> a == "wait", sat_actions),
             Dict(obs => has_packets(obs, sat_idx) ? 1 : 2 for obs in obs_list)
         )
         
@@ -597,7 +549,7 @@ function create_initial_controllers(m::MultiPacketSatelliteNetworkPOMDP)
     return JointController(controllers)
 end
 
-# Helper function to check if satellite has packets in an observation
+# claude
 function has_packets(obs::String, sat_idx::Int)
     # Parse the observation string
     try
@@ -611,7 +563,7 @@ function has_packets(obs::String, sat_idx::Int)
     return false
 end
 
-# Function to create random controllers
+# claude
 function create_random_controllers(m::MultiPacketSatelliteNetworkPOMDP)
     # Create a controller for each satellite
     controllers = AgentController[]
@@ -644,196 +596,7 @@ function create_random_controllers(m::MultiPacketSatelliteNetworkPOMDP)
     return JointController(controllers)
 end
 
-# Evaluate the controller using value iteration
-function evaluate_controller(joint_controller::JointController, prob::MultiPacketSatelliteNetworkPOMDP; 
-                           max_iter=2000, tolerance=1e-6)
-    # Get all possible states
-    all_states = POMDPs.states(prob)
-    
-    # Map states to indices for easier array access
-    state_map = Dict(s => i for (i, s) in enumerate(all_states))
-    
-    # Get the number of states and number of nodes for each agent
-    num_states = length(all_states)
-    num_satellites = length(joint_controller.controllers)
-    nodes_per_sat = [length(c.nodes) for c in joint_controller.controllers]
-    
-    # Create value function matrix
-    # Dimensions: one for each satellite's node, plus one for state
-    dims = [nodes_per_sat..., num_states]
-    V = zeros(dims...)
-    
-    # Discount factor
-    gamma = prob.discount_factor
-    
-    # Value iteration to compute the value function
-    for iter in 1:max_iter
-        # Make a copy of V for updating
-        V_new = copy(V)
-        
-        # For each possible joint node configuration and state
-        for node_indices in Iterators.product([1:n for n in nodes_per_sat]...)
-            for s in 1:num_states
-                # Get the current state name
-                state = all_states[s]
-                
-                # If terminal state, value is 0
-                if state == "all-transmitted"
-                    V_new[node_indices..., s] = 0.0
-                    continue
-                end
-                
-                # Get joint action from current nodes
-                joint_action_indices = [joint_controller.controllers[i].nodes[node_indices[i]].action 
-                                      for i in 1:num_satellites]
-                
-                # Convert action indices to strings
-                joint_action = Tuple(agent_actions(prob, i)[joint_action_indices[i]] 
-                                   for i in 1:num_satellites)
-                
-                # Get immediate reward
-                immediate_reward = POMDPs.reward(prob, state, joint_action)
-                
-                # Expected future reward
-                future_reward = 0.0
-                
-                # For each possible next state
-                for next_s in 1:num_states
-                    next_state = all_states[next_s]
-                    
-                    # Get transition distribution
-                    trans_distribution = POMDPs.transition(prob, state, joint_action)
-                    
-                    # Calculate transition probability
-                    trans_prob = 0.0
-                    
-                    if typeof(trans_distribution) <: Deterministic
-                        # Deterministic transition
-                        trans_prob = (trans_distribution.val == next_state) ? 1.0 : 0.0
-                    elseif typeof(trans_distribution) <: SparseCat
-                        # SparseCat distribution
-                        for (idx, s_val) in enumerate(trans_distribution.vals)
-                            if s_val == next_state
-                                trans_prob = trans_distribution.probs[idx]
-                                break
-                            end
-                        end
-                    else
-                        # Default case - try to use pdf
-                        try
-                            trans_prob = pdf(trans_distribution, next_state)
-                        catch
-                            @warn "Unsupported distribution type: $(typeof(trans_distribution))"
-                            trans_prob = 0.0
-                        end
-                    end
-                    
-                    # Skip if transition probability is 0
-                    if trans_prob ≈ 0.0
-                        continue
-                    end
-                    
-                    # Get observation distribution
-                    obs_distribution = POMDPs.observation(prob, joint_action, next_state)
-                    
-                    # For each possible joint observation
-                    if typeof(obs_distribution) <: Deterministic
-                        # For deterministic observations, just use the single observation
-                        next_obs = obs_distribution.val
-                        
-                        # Determine next nodes for each satellite
-                        next_nodes = []
-                        for i in 1:num_satellites
-                            current_node = joint_controller.controllers[i].nodes[node_indices[i]]
-                            next_node = current_node.transitions[next_obs[i]]
-                            push!(next_nodes, next_node)
-                        end
-                        
-                        # Future value
-                        future_value = V[next_nodes..., next_s]
-                        
-                        # Update expected future reward
-                        future_reward += trans_prob * future_value
-                    else
-                        # For stochastic observations
-                        for (obs_idx, joint_obs) in enumerate(obs_distribution.vals)
-                            obs_prob = obs_distribution.probs[obs_idx]
-                            
-                            # Skip if observation probability is 0
-                            if obs_prob ≈ 0.0
-                                continue
-                            end
-                            
-                            # Determine next nodes for each satellite
-                            next_nodes = []
-                            for i in 1:num_satellites
-                                current_node = joint_controller.controllers[i].nodes[node_indices[i]]
-                                
-                                # Handle potential missing observations in controller
-                                # This can happen if the observation function generates observations
-                                # that weren't included in the initial controller
-                                if haskey(current_node.transitions, joint_obs[i])
-                                    next_node = current_node.transitions[joint_obs[i]]
-                                else
-                                    # Default to staying in same node if observation not recognized
-                                    next_node = node_indices[i]
-                                end
-                                
-                                push!(next_nodes, next_node)
-                            end
-                            
-                            # Future value
-                            future_value = V[next_nodes..., next_s]
-                            
-                            # Update expected future reward
-                            future_reward += trans_prob * obs_prob * future_value
-                        end
-                    end
-                end
-                
-                # Total value for this configuration
-                V_new[node_indices..., s] = immediate_reward + gamma * future_reward
-            end
-        end
-        
-        # Check convergence
-        delta = maximum(abs.(V_new - V))
-        V = copy(V_new)
-        
-        if delta < tolerance
-            # println("Value iteration converged after $(iter) iterations")
-            break
-        end
-        
-        if iter == max_iter
-            @warn "Value iteration did not converge after $(max_iter) iterations"
-        end
-    end
-    
-    # Compute the value for the initial state and initial controller nodes
-    initial_state = initialstate(prob).val
-    initial_state_idx = findfirst(s -> s == initial_state, all_states)
-    
-    if initial_state_idx === nothing
-        @warn "Initial state not found in state space"
-        return -Inf, Dict()
-    end
-    
-    initial_nodes = [1 for _ in 1:num_satellites]  # Start at first node for each satellite
-    
-    value = V[initial_nodes..., initial_state_idx]
-    
-    # Collect some additional information for analysis
-    info = Dict(
-        "state_values" => V,
-        "initial_state_value" => value,
-        "controller_size" => sum(nodes_per_sat)
-    )
-    
-    return value, info
-end
-
-# Verification function to simulate and analyze the controller
+# claude
 function verify_satellite_controller(joint_controller::JointController, prob::MultiPacketSatelliteNetworkPOMDP, num_episodes=1000, max_steps=50)
     total_reward = 0.0
     rewards_per_episode = []
@@ -1052,224 +815,3 @@ function verify_satellite_controller(joint_controller::JointController, prob::Mu
     
     return avg_reward, completion_rate
 end
-
-# For running policy iteration with multi-packet satellite network
-function dec_pomdp_pi(controller::JointController, prob::MultiPacketSatelliteNetworkPOMDP)
-    # Initialize
-    it = 0
-    epsilon = 0.01  # Desired precision
-    R_max = 100.0  # Approximate maximum absolute reward (should be calculated properly)
-    gamma = prob.discount_factor
-    
-    ctrlr_t = deepcopy(controller)
-    n = length(ctrlr_t.controllers)
-    
-    # Initial evaluation
-    V_prev, _ = evaluate_controller(ctrlr_t, prob)
-    println("Initial controller value: $(V_prev)")
-    
-    # Set initial values
-    V_curr = V_prev
-    improvement = Inf  # Start with infinite improvement to ensure first iteration
-    
-    # Main policy iteration loop with proper stopping condition
-    while it < 30 && improvement > epsilon
-        # [Backup and evaluate]
-        for i in 1:n
-            println("Backing up agent $i...")
-            new_controller = improved_exhaustive_backup(
-                ctrlr_t.controllers[i],
-                ctrlr_t,
-                i,
-                prob
-            )
-            
-            ctrlr_t.controllers[i] = new_controller
-        end
-        
-        # Evaluate the joint controller
-        V_curr, _ = evaluate_controller(ctrlr_t, prob)
-        println("After backup, controller value: $(V_curr)")
-        
-        # Calculate improvement (absolute difference)
-        improvement = abs(V_curr - V_prev)
-        println("Improvement: $(improvement)")
-        
-        # Update previous value for next iteration
-        V_prev = V_curr
-        
-        it += 1
-        println("Completed iteration $(it)")
-        
-        # Additional stopping condition based on convergence formula
-        if (gamma^it * R_max) < epsilon
-            println("Theoretical bound reached, algorithm converged.")
-            break
-        end
-    end
-    
-    # Report reason for stopping
-    if it >= 30
-        println("Stopped due to maximum iterations reached.")
-    elseif improvement <= epsilon
-        println("Stopped due to convergence (improvement below threshold).")
-    end
-    
-    return it, ctrlr_t
-end
-
-# Improved exhaustive backup function for multi-packet satellite network
-function improved_exhaustive_backup(controller::AgentController, joint_controller::JointController, agent_idx::Int, prob::MultiPacketSatelliteNetworkPOMDP)
-    original_controller = deepcopy(controller)
-    
-    # Extract individual agent actions
-    agent_act = agent_actions(prob, agent_idx)
-    
-    # Get individual agent observations
-    obs_list = agent_observations(prob)
-    
-    current_nodes = length(controller.nodes)
-    candidate_nodes = Vector{FSCNode}()
-    
-    # Generate candidate nodes (simplified to reduce computation)
-    for action_idx in 1:length(agent_act)
-        # We'll create candidates with different transition patterns
-        # but limit the total number to prevent combinatorial explosion
-        
-        # Simple pattern: go to node 1 for all observations
-        transitions1 = Dict{String, Int}()
-        for obs in obs_list
-            transitions1[obs] = 1
-        end
-        push!(candidate_nodes, FSCNode(action_idx, transitions1))
-        
-        # Pattern: separate nodes for data vs no data observations
-        transitions2 = Dict{String, Int}()
-        for obs in obs_list
-            # Go to node 1 if observation suggests we have data, else node 2
-            transitions2[obs] = has_packets(obs, agent_idx) ? 1 : 2
-        end
-        
-        if current_nodes >= 2
-            push!(candidate_nodes, FSCNode(action_idx, transitions2))
-        end
-        
-        # Add a few random transition patterns to increase diversity
-        for _ in 1:3
-            transitions_rand = Dict{String, Int}()
-            for obs in obs_list
-                transitions_rand[obs] = rand(1:max(2, current_nodes))
-            end
-            push!(candidate_nodes, FSCNode(action_idx, transitions_rand))
-        end
-    end
-    
-    # Evaluate the current controller value
-    current_value, _ = evaluate_controller(joint_controller, prob)
-    println("Current value before backup: $current_value")
-    
-    # Try each candidate node as a replacement for each existing node
-    best_controller = deepcopy(controller)
-    best_value = current_value
-    improved = false
-    
-    # For each existing node in the controller
-    for node_idx in 1:length(controller.nodes)
-        # Try replacing with each candidate node
-        for candidate in candidate_nodes
-            # Create a temporary controller with this node replaced
-            temp_controller = deepcopy(controller)
-            
-            # Replace the node
-            new_nodes = Vector{FSCNode}()
-            for i in 1:length(temp_controller.nodes)
-                if i == node_idx
-                    push!(new_nodes, candidate)
-                else
-                    push!(new_nodes, temp_controller.nodes[i])
-                end
-            end
-            temp_controller = AgentController(new_nodes)
-            
-            # Create a temporary joint controller for evaluation
-            temp_joint_controller = deepcopy(joint_controller)
-            temp_joint_controller.controllers[agent_idx] = temp_controller
-            
-            # Evaluate this controller
-            temp_value, _ = evaluate_controller(temp_joint_controller, prob)
-            
-            # If it's better, keep it
-            if temp_value > best_value
-                best_value = temp_value
-                best_controller = deepcopy(temp_controller)
-                improved = true
-                println("Found improvement by replacing node $node_idx, new value: $temp_value")
-            end
-        end
-    end
-    
-    # Try adding a new node (only if it helps and controller isn't too large)
-    if !improved && length(controller.nodes) < 5  # Limit size to prevent explosion
-        for candidate in candidate_nodes
-            # Create a temporary controller with this node added
-            temp_controller = deepcopy(controller)
-            new_nodes = copy(temp_controller.nodes)
-            push!(new_nodes, candidate)
-            temp_controller = AgentController(new_nodes)
-            
-            # Create a temporary joint controller
-            temp_joint_controller = deepcopy(joint_controller)
-            temp_joint_controller.controllers[agent_idx] = temp_controller
-            
-            # Evaluate this controller
-            temp_value, _ = evaluate_controller(temp_joint_controller, prob)
-            
-            # If it's better, keep it
-            if temp_value > best_value
-                best_value = temp_value
-                best_controller = deepcopy(temp_controller)
-                improved = true
-                println("Found improvement by adding a new node, new value: $temp_value")
-                # Break early when we find an improvement to save computation
-                break
-            end
-        end
-    end
-    
-    # Return the best controller found
-    if improved
-        println("Controller improved from $current_value to $best_value")
-        return best_controller
-    else
-        println("No improvement found, returning original controller")
-        return original_controller
-    end
-end
-
-# Create a satellite network with 4 satellites and 5 data packets
-sat_network = MultiPacketSatelliteNetworkPOMDP(
-    num_satellites = 3,
-    total_packets = 2,
-    max_capacity = 3,
-    ground_tx_probs = [0.3, 0.5, 0.6],
-    discount_factor = 0.9,
-    pass_success_prob = 0.95,
-    observation_accuracy = 0.8,
-    successful_tx_reward = 10.0,
-    unsuccessful_tx_penalty = -2.0,
-    pass_cost = -1.0,
-    congestion_penalty = -5.0
-)
-
-# Create initial controller
-initial_ctrl = create_initial_controllers(sat_network)
-
-# Run policy iteration
-iterations, final_controller = dec_pomdp_pi(initial_ctrl, sat_network)
-
-# Verify the controller
-avg_reward, completion_rate = verify_satellite_controller(final_controller, sat_network)
-
-println("Policy iteration completed in $iterations iterations.")
-println("Final controller average reward: $avg_reward")
-println("Completion rate: $(completion_rate * 100)%")
