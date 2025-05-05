@@ -25,6 +25,7 @@ sat_network = MultiPacketSatelliteNetworkPOMDP(
 
 ## Contents
 
+The main scripts of interest are `Problems/multi_packet_satellite_pomdp.jl`, which contains the definition of the problem, `Solvers/dec_pi_packet_solver`, which contains the code for policy iteration, and `src/main.jl`, which provides a driver script for the package. The others problems/solvers were developed on the way to get the main one to work.
 
 ### prev
 

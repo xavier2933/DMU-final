@@ -9,9 +9,7 @@ include("../Solvers/dec_pi_packet_solver.jl")
 """
     MultiPacketSatelliteNetworkPOMDP
 
-A decentralized POMDP modeling a network of satellites that need to coordinate
-to transmit multiple data packets to the ground. Each satellite can pass data to neighbors
-or attempt to transmit to ground with varying success probabilities.
+    Problem definition. Gets fed into dec_pi_packet_solver
 """
 
 # structs for controllers
