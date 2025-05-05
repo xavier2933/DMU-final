@@ -27,9 +27,6 @@ sat_network = MultiPacketSatelliteNetworkPOMDP(
 
 The main scripts of interest are `Problems/multi_packet_satellite_pomdp.jl`, which contains the definition of the problem, `Solvers/dec_pi_packet_solver`, which contains the code for policy iteration, and `src/main.jl`, which provides a driver script for the package. The others problems/solvers were developed on the way to get the main one to work.
 
-### prev
-
-Initial work for MDP.
 
 ### Problems
 
@@ -38,6 +35,13 @@ Definitions for the three different types of problems that were used to verify t
 ### Solvers
 
 This is where the solvers live. The one for our project is `dec_pi_packet_solver.jl`. The others are for the other problems, or earlier iterations of this solver.
+
+### dec_pomdp_env
+Julia environment for this project. Probably not best practice to commit this, but I think it makes it easier to run?
+
+### prev
+
+Initial work for MDP.
 
 ### src
 
