@@ -5,8 +5,8 @@ using Random
 
 
 struct FSCNode
-    action::Int  # Index of the action to take
-    transitions::Dict{String, Int}  # Observation -> next node mapping
+    action::Int
+    transitions::Dict{String, Int}
 end
 
 struct AgentController
@@ -19,26 +19,22 @@ end
 
 
 function dec_pomdp_pi(controller::JointController, prob::POMDP)
-    # Initialize
     it = 0
-    epsilon = 0.01  # Desired precision
-    R_max = 100.0  # Approximate maximum absolute reward (should be calculated properly)
+    epsilon = 0.01 
+    R_max = 100.0
     gamma = prob.discount_factor
     
     ctrlr_t = deepcopy(controller)
     n = length(ctrlr_t.controllers)
     
-    # Initial evaluation
     V_prev = evaluate_controller(ctrlr_t, prob)
     println("Initial controller value: $(V_prev)")
     
-    # Set initial values
     V_curr = V_prev
-    improvement = Inf  # Start with infinite improvement to ensure first iteration
+    improvement = Inf
     
-    # Main policy iteration loop with proper stopping condition
+    # 30 seemed reasonable for this problem with pi
     while it < 30 && improvement > epsilon
-        # [Backup and evaluate]
         for i in 1:n
             println("Backing up agent $i...")
             new_controller = improved_exhaustive_backup(
@@ -51,28 +47,24 @@ function dec_pomdp_pi(controller::JointController, prob::POMDP)
             ctrlr_t.controllers[i] = new_controller
         end
         
-        # Evaluate the joint controller
         V_curr = evaluate_controller(ctrlr_t, prob)
         println("After backup, controller value: $(V_curr)")
         
-        # Calculate improvement (absolute difference)
         improvement = abs(V_curr - V_prev)
         println("Improvement: $(improvement)")
         
-        # Update previous value for next iteration
         V_prev = V_curr
         
         it += 1
         println("Completed iteration $(it)")
         
-        # Additional stopping condition based on convergence formula
+        # Stopping criteria from book
         if (gamma^it * R_max) < epsilon
             println("Theoretical bound reached, algorithm converged.")
             break
         end
     end
     
-    # Report reason for stopping
     if it >= 30
         println("Stopped due to maximum iterations reached.")
     elseif improvement <= epsilon
@@ -82,81 +74,78 @@ function dec_pomdp_pi(controller::JointController, prob::POMDP)
     return it, ctrlr_t
 end
 
-# Improved exhaustive backup function for multi-packet satellite network
+# Improved exhaustive backup function - help from Claude
 function improved_exhaustive_backup(controller::AgentController, joint_controller::JointController, agent_idx::Int, prob::POMDP)
     original_controller = deepcopy(controller)
     
-    # Extract individual agent actions
+    # Pre-compute these values once
     agent_act = agent_actions(prob, agent_idx)
-    
-    # Get individual agent observations
     obs_list = agent_observations(prob)
-    
     current_nodes = length(controller.nodes)
-    candidate_nodes = Vector{FSCNode}()
     
-    # Generate candidate nodes (simplified to reduce computation)
+    # Pre-allocate with a reasonable capacity to avoid resizing
+    candidate_nodes = Vector{FSCNode}(undef, length(agent_act) * 5)
+    candidate_count = 0
+    
+    # Generate candidate nodes more efficiently
     for action_idx in 1:length(agent_act)
-        # We'll create candidates with different transition patterns
-        # but limit the total number to prevent combinatorial explosion
-        
         # Simple pattern: go to node 1 for all observations
         transitions1 = Dict{String, Int}()
         for obs in obs_list
             transitions1[obs] = 1
         end
-        push!(candidate_nodes, FSCNode(action_idx, transitions1))
+        candidate_count += 1
+        candidate_nodes[candidate_count] = FSCNode(action_idx, transitions1)
         
         # Pattern: separate nodes for data vs no data observations
-        transitions2 = Dict{String, Int}()
-        for obs in obs_list
-            # Go to node 1 if observation suggests we have data, else node 2
-            transitions2[obs] = has_packets(obs, agent_idx) ? 1 : 2
-        end
-        
         if current_nodes >= 2
-            push!(candidate_nodes, FSCNode(action_idx, transitions2))
+            transitions2 = Dict{String, Int}()
+            for obs in obs_list
+                # Go to node 1 if observation suggests we have data, else node 2
+                transitions2[obs] = has_packets(obs, agent_idx) ? 1 : 2
+            end
+            candidate_count += 1
+            candidate_nodes[candidate_count] = FSCNode(action_idx, transitions2)
         end
         
-        # Add a few random transition patterns to increase diversity
+        # Add random transition patterns (limit to 3)
         for _ in 1:3
             transitions_rand = Dict{String, Int}()
             for obs in obs_list
                 transitions_rand[obs] = rand(1:max(2, current_nodes))
             end
-            push!(candidate_nodes, FSCNode(action_idx, transitions_rand))
+            candidate_count += 1
+            candidate_nodes[candidate_count] = FSCNode(action_idx, transitions_rand)
         end
     end
     
-    # Evaluate the current controller value
+    # Resize to actual number of candidates
+    resize!(candidate_nodes, candidate_count)
+    
+    # Evaluate the current controller value just once
     current_value = evaluate_controller(joint_controller, prob)
     println("Current value before backup: $current_value")
     
-    # Try each candidate node as a replacement for each existing node
+    # Track best results
     best_controller = deepcopy(controller)
     best_value = current_value
     improved = false
     
+    # Reuse these temporary objects to reduce allocations
+    temp_controller = deepcopy(controller)
+    temp_joint_controller = deepcopy(joint_controller)
+    
     # For each existing node in the controller
     for node_idx in 1:length(controller.nodes)
+        # For better performance, avoid recreation of the entire controller each time
+        original_node = controller.nodes[node_idx]
+        
         # Try replacing with each candidate node
         for candidate in candidate_nodes
-            # Create a temporary controller with this node replaced
-            temp_controller = deepcopy(controller)
+            # Replace just the specific node instead of deep copying everything
+            temp_controller.nodes[node_idx] = candidate
             
-            # Replace the node
-            new_nodes = Vector{FSCNode}()
-            for i in 1:length(temp_controller.nodes)
-                if i == node_idx
-                    push!(new_nodes, candidate)
-                else
-                    push!(new_nodes, temp_controller.nodes[i])
-                end
-            end
-            temp_controller = AgentController(new_nodes)
-            
-            # Create a temporary joint controller for evaluation
-            temp_joint_controller = deepcopy(joint_controller)
+            # Update the joint controller reference
             temp_joint_controller.controllers[agent_idx] = temp_controller
             
             # Evaluate this controller
@@ -165,24 +154,28 @@ function improved_exhaustive_backup(controller::AgentController, joint_controlle
             # If it's better, keep it
             if temp_value > best_value
                 best_value = temp_value
+                # Only deepcopy when we find a better solution
                 best_controller = deepcopy(temp_controller)
                 improved = true
                 println("Found improvement by replacing node $node_idx, new value: $temp_value")
             end
         end
+        
+        # Restore the original node for the next iteration
+        temp_controller.nodes[node_idx] = original_node
     end
     
-    # Try adding a new node (only if it helps and controller isn't too large)
-    if !improved && length(controller.nodes) < 5  # Limit size to prevent explosion
-        for candidate in candidate_nodes
-            # Create a temporary controller with this node added
-            temp_controller = deepcopy(controller)
-            new_nodes = copy(temp_controller.nodes)
-            push!(new_nodes, candidate)
-            temp_controller = AgentController(new_nodes)
+    # Try adding a new node (only if no improvement was found and controller isn't too large)
+    if !improved && length(controller.nodes) < 8
+        # Prepare the temporary controller with space for a new node
+        temp_controller = deepcopy(controller)
+        push!(temp_controller.nodes, FSCNode(1, Dict{String, Int}())) # Placeholder
+        
+        for (i, candidate) in enumerate(candidate_nodes)
+            # Replace the last node with the candidate
+            temp_controller.nodes[end] = candidate
             
-            # Create a temporary joint controller
-            temp_joint_controller = deepcopy(joint_controller)
+            # Update the joint controller reference
             temp_joint_controller.controllers[agent_idx] = temp_controller
             
             # Evaluate this controller
@@ -194,7 +187,7 @@ function improved_exhaustive_backup(controller::AgentController, joint_controlle
                 best_controller = deepcopy(temp_controller)
                 improved = true
                 println("Found improvement by adding a new node, new value: $temp_value")
-                # Break early when we find an improvement to save computation
+                # Break early when we find an improvement
                 break
             end
         end

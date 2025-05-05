@@ -1,0 +1,14 @@
+episode,step,state,action,reward,sat1_packets,sat1_action,sat1_node,sat2_packets,sat2_action,sat2_node,transmitted_packets,total_packets
+1,1,1-0,"(""pass-right-1"", ""transmit-1"")",-1.0,1,pass-right-1,1,0,transmit-1,1,0,1
+1,2,0-1,"(""pass-right-1"", ""transmit-1"")",4.0,0,pass-right-1,1,1,transmit-1,2,0,1
+1,3,0-1,"(""wait"", ""transmit-1"")",4.0,0,wait,2,1,transmit-1,2,0,1
+1,4,0-1,"(""wait"", ""transmit-1"")",4.0,0,wait,2,1,transmit-1,2,0,1
+1,5,all-transmitted,"(""wait"", ""wait"")",0.0,0,wait,2,0,wait,2,1,1
+2,1,1-0,"(""pass-right-1"", ""transmit-1"")",-1.0,1,pass-right-1,1,0,transmit-1,1,0,1
+2,2,0-1,"(""pass-right-1"", ""transmit-1"")",4.0,0,pass-right-1,1,1,transmit-1,2,0,1
+2,3,0-1,"(""pass-right-1"", ""transmit-1"")",4.0,0,pass-right-1,1,1,transmit-1,2,0,1
+2,4,0-1,"(""pass-right-1"", ""transmit-1"")",4.0,0,pass-right-1,1,1,transmit-1,2,0,1
+2,5,all-transmitted,"(""wait"", ""wait"")",0.0,0,wait,2,0,wait,2,1,1
+3,1,1-0,"(""pass-right-1"", ""transmit-1"")",-1.0,1,pass-right-1,1,0,transmit-1,1,0,1
+3,2,0-1,"(""pass-right-1"", ""transmit-1"")",4.0,0,pass-right-1,1,1,transmit-1,2,0,1
+3,3,all-transmitted,"(""wait"", ""wait"")",0.0,0,wait,2,0,wait,2,1,1

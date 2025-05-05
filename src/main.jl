@@ -17,12 +17,12 @@ include("controller_visualization.jl")  # Include the FINAL visualization module
 # Create a satellite network problem (adjust parameters as needed)
 sat_network = MultiPacketSatelliteNetworkPOMDP(
     num_satellites = 3,  # Reduced to match your example
-    total_packets = 4,   # Reduced to match your example
-    max_capacity = 3,
-    ground_tx_probs = [0.1, 0.5, 0.99],  # First satellite has low transmission probability, last has high
+    total_packets = 3,   # Reduced to match your example
+    max_capacity = 2,
+    ground_tx_probs = [0.1, 0.7, .9],  # First satellite has low transmission probability, last has high
     discount_factor = 0.9,
     pass_success_prob = 0.95,
-    observation_accuracy = 0.8,
+    observation_accuracy = 1.0,
     successful_tx_reward = 10.0,
     unsuccessful_tx_penalty = -2.0,
     pass_cost = -1.0,
@@ -43,19 +43,20 @@ println("Policy iteration completed in $iterations iterations.")
 println("Final controller average reward: $avg_reward")
 println("Completion rate: $(completion_rate * 100)%")
 
+csvfile = "2_sats_3_packets.csv"
 # Step 1: Save controller execution data to CSV
 println("Recording controller execution data...")
 data = run_and_record_controller(final_controller, sat_network, 
                                num_episodes=3,  # Run for 3 episodes
                                max_steps=15,    # Maximum of 15 steps per episode
-                               output_path="controller_data.csv")  # Save to CSV
+                               output_path=csvfile)  # Save to CSV
 
 # Step 2: Create visualizations from the CSV data
 println("Creating visualizations...")
 # Visualize episode 1
-p1 = visualize_controller_data("controller_data.csv", 
+p1 = visualize_controller_data(csvfile, 
                              episode=1, 
-                             output_path="episode_1_visualization.png")
+                             output_path="2_sats_3_packets.png")
 
 println("Done! Check the output files:")
 println("- controller_data.csv: Raw execution data")

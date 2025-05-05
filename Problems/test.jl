@@ -14,10 +14,10 @@ to transmit multiple data packets to the ground. Each satellite can pass data to
 or attempt to transmit to ground with varying success probabilities.
 """
 
-# Basic node structure for finite state controllers
+# structs for controllers
 struct FSCNode
-    action::Int  # Index of the action to take
-    transitions::Dict{String, Int}  # Observation -> next node mapping
+    action::Int
+    transitions::Dict{String, Int}
 end
 
 struct AgentController
@@ -42,7 +42,6 @@ struct MultiPacketSatelliteNetworkPOMDP <: POMDP{String, Tuple{Vararg{String}}, 
     congestion_penalty::Float64        # Penalty for having too many packets at one satellite
 end
 
-# Default constructor
 function MultiPacketSatelliteNetworkPOMDP(;
     num_satellites = 3,
     total_packets = 5,
@@ -80,7 +79,6 @@ function MultiPacketSatelliteNetworkPOMDP(;
     )
 end
 
-# Helper function to generate all ways to distribute packets
 function partition_packets(num_satellites, total_packets, max_per_sat=nothing)
     if max_per_sat === nothing
         max_per_sat = total_packets
@@ -96,7 +94,6 @@ function partition_packets(num_satellites, total_packets, max_per_sat=nothing)
             return
         end
         
-        # Try different amounts of packets for current satellite
         for i in 0:min(remaining, max_per_sat)
             current_partition[current_idx] = i
             generate_partitions(remaining - i, current_idx + 1, current_partition)
@@ -107,7 +104,6 @@ function partition_packets(num_satellites, total_packets, max_per_sat=nothing)
     return partitions
 end
 
-# Helper function to parse state string into packet counts
 function parse_state(s::String)
     if s == "all-transmitted"
         return Int[]
@@ -116,12 +112,11 @@ function parse_state(s::String)
     end
 end
 
-# Helper function to calculate binomial probability
 function binomial_probability(n, k, p)
     return binomial(n, k) * p^k * (1-p)^(n-k)
 end
 
-# Define state space - how packets are distributed among satellites
+# Claude for elegant scalable solution
 function POMDPs.states(m::MultiPacketSatelliteNetworkPOMDP)
     # Generate all possible distributions of packets
     data_distributions = []
@@ -146,38 +141,11 @@ function POMDPs.states(m::MultiPacketSatelliteNetworkPOMDP)
     return data_distributions
 end
 
-# Define agent actions
 function POMDPs.actions(m::MultiPacketSatelliteNetworkPOMDP)
-    # Generate all combinations of actions for all satellites
     joint_actions = Vector{NTuple{m.num_satellites, String}}()
     
-    # Get individual actions for each satellite based on position
-    sat_actions_list = []
-    for sat_idx in 1:m.num_satellites
-        sat_actions = ["wait"]  # All satellites can wait
-        
-        # Transmit actions for different packet counts
-        for i in 1:m.max_capacity
-            push!(sat_actions, "transmit-$i")
-        end
-        
-        # Pass actions depend on satellite position
-        if sat_idx > 1  # Can pass left if not leftmost
-            for i in 1:m.max_capacity
-                push!(sat_actions, "pass-left-$i")
-            end
-        end
-        
-        if sat_idx < m.num_satellites  # Can pass right if not rightmost
-            for i in 1:m.max_capacity
-                push!(sat_actions, "pass-right-$i")
-            end
-        end
-        
-        push!(sat_actions_list, sat_actions)
-    end
+    sat_actions_list = [agent_actions(m, sat_idx) for sat_idx in 1:m.num_satellites]
     
-    # Generate all combinations recursively
     current_actions = ["wait" for _ in 1:m.num_satellites]
     
     function generate_actions(sat_idx)
@@ -196,7 +164,7 @@ function POMDPs.actions(m::MultiPacketSatelliteNetworkPOMDP)
     return joint_actions
 end
 
-# Define observation space
+# Claude
 function POMDPs.observations(m::MultiPacketSatelliteNetworkPOMDP)
     # Each satellite observes a packet distribution with possible errors
     # To keep things manageable, we'll use a simplified representation
@@ -237,30 +205,25 @@ function POMDPs.observations(m::MultiPacketSatelliteNetworkPOMDP)
     return joint_obs
 end
 
-# Define initial state distribution
-function POMDPs.initialstate(m::MultiPacketSatelliteNetworkPOMDP)
-    # Initial state: all packets at the first satellite
-    initial_distribution = zeros(Int, m.num_satellites)
-    initial_distribution[1] = m.total_packets
+function POMDPs.initialstate(prob::POMDP)
+
+    initial_distribution = zeros(Int, prob.num_satellites)
+    initial_distribution[1] = prob.total_packets
+
     return Deterministic(join(initial_distribution, "-"))
 end
 
-# Define discount factor
 function POMDPs.discount(m::MultiPacketSatelliteNetworkPOMDP)
     return m.discount_factor
 end
 
-# Define transition function
 function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tuple{Vararg{String}})
-    # If all data transmitted, stay in terminal state
     if s == "all-transmitted"
         return Deterministic("all-transmitted")
     end
     
-    # Parse current packet distribution
     packet_counts = parse_state(s)
     
-    # Process each satellite's action
     new_packet_counts = copy(packet_counts)
     next_states = String[]
     next_probs = Float64[]
@@ -270,7 +233,8 @@ function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tu
         action = a[sat_idx]
         
         if startswith(action, "transmit-")
-            # Extract number of packets to transmit
+            # Extract number of packets to transmit - old, used to be able to send
+            # multiple at each time step, didn't want to re-factor
             num_packets = parse(Int, split(action, "-")[2])
             
             # Can't transmit more than you have
@@ -279,14 +243,12 @@ function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tu
             if actual_packets > 0
                 # Create all possible transmission outcomes
                 for success_count in 0:actual_packets
-                    # Calculate probability of this outcome
+                    # Calculate probability of this outcome - Claude
                     prob = binomial_probability(actual_packets, success_count, m.ground_tx_probs[sat_idx])
                     
-                    # Create new state with successful transmissions removed
                     temp_counts = copy(new_packet_counts)
                     temp_counts[sat_idx] -= success_count
                     
-                    # Check if all packets transmitted
                     if sum(temp_counts) == 0
                         next_state = "all-transmitted"
                     else
@@ -296,20 +258,16 @@ function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tu
                     push!(next_states, next_state)
                     push!(next_probs, prob)
                 end
-                
-                # Update packet count for subsequent actions
                 new_packet_counts[sat_idx] -= actual_packets
+
             end
         end
     end
     
-    # If no transmissions occurred, process packet passing
     if isempty(next_states)
-        # Initialize with current state
         temp_packet_counts = copy(packet_counts)
         changes_made = false
         
-        # Process each satellite's pass actions
         for sat_idx in 1:m.num_satellites
             action = a[sat_idx]
             
@@ -318,31 +276,26 @@ function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tu
                 direction = parts[2]
                 num_packets = parse(Int, parts[3])
                 
-                # Can't pass more than you have
                 actual_packets = min(num_packets, temp_packet_counts[sat_idx])
                 
                 if actual_packets > 0
                     changes_made = true
                     
-                    # Determine target satellite
                     target_idx = -1
                     if direction == "left" && sat_idx > 1
                         target_idx = sat_idx - 1
                     elseif direction == "right" && sat_idx < m.num_satellites
                         target_idx = sat_idx + 1
                     else
-                        continue  # Invalid direction
+                        continue
                     end
                     
-                    # Calculate success probability for each packet
                     pass_prob = m.pass_success_prob
                     
-                    # Generate all possible outcomes
                     for success_count in 0:actual_packets
-                        # Calculate probability of this outcome
+                        # Calculate probability of this outcome - Claude
                         prob = binomial_probability(actual_packets, success_count, pass_prob)
                         
-                        # Create new state with successful passes
                         temp_counts = copy(temp_packet_counts)
                         temp_counts[sat_idx] -= success_count
                         temp_counts[target_idx] += success_count
@@ -352,15 +305,12 @@ function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tu
                         push!(next_probs, prob)
                     end
                     
-                    # Update for subsequent actions
-                    # Assume all packets passed for simplicity
                     temp_packet_counts[sat_idx] -= actual_packets
                     temp_packet_counts[target_idx] += actual_packets
                 end
             end
         end
         
-        # If no changes were made, stay in the same state
         if !changes_made
             push!(next_states, s)
             push!(next_probs, 1.0)
@@ -379,19 +329,16 @@ function POMDPs.transition(m::MultiPacketSatelliteNetworkPOMDP, s::String, a::Tu
     return SparseCat(next_states, next_probs)
 end
 
-# Define observation function
 function POMDPs.observation(m::MultiPacketSatelliteNetworkPOMDP, a::Tuple{Vararg{String}}, sp::String)
-    # If all data transmitted, observation is simple
+    # Claude helped with this
+
     if sp == "all-transmitted"
         empty_obs = join(zeros(Int, m.num_satellites), "-")
         return Deterministic(Tuple(fill(empty_obs, m.num_satellites)))
     end
     
-    # Parse true packet distribution
     true_packet_counts = parse_state(sp)
     
-    # For simplicity, we'll generate a small set of possible observations
-    # with probabilities based on observation accuracy
     possible_obs = []
     obs_probs = []
     
@@ -489,16 +436,14 @@ end
 function agent_actions(m::MultiPacketSatelliteNetworkPOMDP, sat_idx::Int)
     actions = ["wait"]  
     
-    # MODIFICATION: Only allow transmitting 1 packet at a time
-    push!(actions, "transmit-1")  # Only 1 packet, not multiple
+    push!(actions, "transmit-1")
     
-    # MODIFICATION: Only allow passing 1 packet at a time
-    if sat_idx > 1  # Can pass left if not leftmost
-        push!(actions, "pass-left-1")  # Only 1 packet, not multiple
+    if sat_idx > 1 
+        push!(actions, "pass-left-1")
     end
     
-    if sat_idx < m.num_satellites  # Can pass right if not rightmost
-        push!(actions, "pass-right-1")  # Only 1 packet, not multiple
+    if sat_idx < m.num_satellites
+        push!(actions, "pass-right-1")
     end
     
     return actions

@@ -310,6 +310,15 @@ function visualize_controller_data(csv_path::String; episode=1, output_path=noth
     # Plot transmitted packets
     plot!(p1, episode_data.step, transmitted, 
           label="Transmitted", marker=:star, markersize=6, linewidth=2, linestyle=:dash)
+
+    # Save p1 to a separate file if output_path is specified
+    if output_path !== nothing
+        base, ext = splitext(output_path)
+        p1_path = "$(base)_packet_distribution$(ext)"
+        savefig(p1, p1_path)
+        println("Packet distribution plot saved to $p1_path")
+    end
+
     
     # 2. Actions taken by each satellite
     p2 = plot(
