@@ -10,23 +10,23 @@ using DataFrames
 using Plots
 
 # Include your problem and solver definitions
-include("../Problems/test.jl")  # Your MultiPacketSatelliteNetworkPOMDP definition
+include("../Problems/multi_packet_satellite_pomdp.jl")  # Your MultiPacketSatelliteNetworkPOMDP definition
 include("../Solvers/dec_pi_packet_solver.jl")  # Your solver
 include("controller_visualization.jl")  # Include the FINAL visualization module
 
 # Create a satellite network problem (adjust parameters as needed)
 sat_network = MultiPacketSatelliteNetworkPOMDP(
-    num_satellites = 3,  # Reduced to match your example
-    total_packets = 3,   # Reduced to match your example
+    num_satellites = 4,
+    total_packets = 4,
     max_capacity = 2,
-    ground_tx_probs = [0.1, 0.7, .9],  # First satellite has low transmission probability, last has high
-    discount_factor = 0.9,
+    ground_tx_probs = [0.2, 0.8, 0.9, 0.99],  # Increased the first satellite's tx probability
+    discount_factor = 0.95,             # Slightly higher discount factor to value future rewards more
     pass_success_prob = 0.95,
     observation_accuracy = 1.0,
-    successful_tx_reward = 10.0,
-    unsuccessful_tx_penalty = -2.0,
-    pass_cost = -1.0,
-    congestion_penalty = -5.0
+    successful_tx_reward = 80.0,        # Doubled the reward for successful transmission
+    unsuccessful_tx_penalty = -1.0,     # Reduced penalty for unsuccessful transmission
+    pass_cost = -0.1,                   # Reduced pass cost to encourage packet movement
+    congestion_penalty = -20.0           # Increased congestion penalty to discourage holding packets
 )
 
 # Create initial controller
@@ -43,12 +43,12 @@ println("Policy iteration completed in $iterations iterations.")
 println("Final controller average reward: $avg_reward")
 println("Completion rate: $(completion_rate * 100)%")
 
-csvfile = "2_sats_3_packets.csv"
+csvfile = "3_sats_5_packets.csv"
 # Step 1: Save controller execution data to CSV
 println("Recording controller execution data...")
 data = run_and_record_controller(final_controller, sat_network, 
-                               num_episodes=3,  # Run for 3 episodes
-                               max_steps=15,    # Maximum of 15 steps per episode
+                               num_episodes=5,  # Run for 3 episodes
+                               max_steps=30,    # Maximum of 15 steps per episode
                                output_path=csvfile)  # Save to CSV
 
 # Step 2: Create visualizations from the CSV data

@@ -1,7 +1,7 @@
 using Pkg
 using Statistics
 using POMDPTools
-Pkg.activate("dec_pomdp_env")  # Create a new environment
+Pkg.activate("dec_pomdp_env")
 include("../Problems/satellite_dec_pomdp.jl")
 
 
